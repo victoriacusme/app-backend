@@ -1,7 +1,9 @@
 package ec.nexo.customer.infrastructure.adapter.out.persistence;
 
 import ec.nexo.customer.domain.model.Segment;
+import ec.nexo.customer.infrastructure.adapter.out.persistence.crypto.EncryptedStringConverter;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -22,13 +24,16 @@ class CustomerEntity {
     @Column(name = "full_name", nullable = false, length = 120)
     private String fullName;
 
-    @Column(name = "id_number", nullable = false, length = 20)
+    // Datos personales cifrados en reposo: en la BD solo hay "v1:<base64>".
+    @Convert(converter = EncryptedStringConverter.class)
+    @Column(name = "id_number", nullable = false)
     private String idNumber;
 
     @Column(nullable = false, length = 120)
     private String email;
 
-    @Column(nullable = false, length = 20)
+    @Convert(converter = EncryptedStringConverter.class)
+    @Column(nullable = false)
     private String phone;
 
     @Column(name = "birth_date", nullable = false)

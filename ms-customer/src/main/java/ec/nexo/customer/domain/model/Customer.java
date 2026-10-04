@@ -42,6 +42,12 @@ public record Customer(UUID id, String fullName, String idNumber, String email, 
         return mask(phone);
     }
 
+    /** Solo datos no sensibles: un cliente puede terminar en un log o en el mensaje de una excepción. */
+    @Override
+    public String toString() {
+        return "Customer[id=" + id + ", segment=" + segment + "]";
+    }
+
     private static String mask(String value) {
         int visibleFrom = Math.max(0, value.length() - VISIBLE_DIGITS);
         return "*".repeat(visibleFrom) + value.substring(visibleFrom);

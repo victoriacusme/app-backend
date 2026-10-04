@@ -59,5 +59,11 @@ public class LoginUseCase {
     }
 
     public record LoginCommand(String username, String password, String deviceId) {
+
+        /** Nunca imprime la contraseña. */
+        @Override
+        public String toString() {
+            return "LoginCommand[username=" + username + ", deviceId=" + deviceId + "]";
+        }
     }
 }

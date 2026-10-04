@@ -33,6 +33,13 @@ class CustomerTest {
     }
 
     @Test
+    void suToStringNoExponeDatosPersonales() {
+        String text = register("Ana Torres", LocalDate.of(2003, 5, 14)).toString();
+
+        assertThat(text).doesNotContain("1712345678", "+593991234567", "ana@nexo.ec", "Ana Torres");
+    }
+
+    @Test
     void normalizaElEmail() {
         assertThat(register("A", TODAY.minusYears(30)).email()).isEqualTo("ana@nexo.ec");
     }

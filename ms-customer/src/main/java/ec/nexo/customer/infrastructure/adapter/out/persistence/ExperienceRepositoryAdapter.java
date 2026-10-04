@@ -25,6 +25,6 @@ class ExperienceRepositoryAdapter implements ExperienceRepositoryPort {
     private static ExperienceComponent toDomain(ExperienceComponentEntity e) {
         return new ExperienceComponent(e.getId(), e.getName(), e.getScreen(), e.getSegment(), e.getType(),
                 e.getPosition(), e.getProps(), e.isActive(), e.isPromotion(), e.getStartsAt(), e.getEndsAt(),
-                e.getHourFrom(), e.getHourTo());
+                e.getHourFrom(), e.getHourTo(), e.getCustomerId());
     }
 }

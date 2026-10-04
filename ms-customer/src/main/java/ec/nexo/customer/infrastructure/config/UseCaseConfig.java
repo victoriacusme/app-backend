@@ -3,6 +3,7 @@ package ec.nexo.customer.infrastructure.config;
 import ec.nexo.customer.application.port.out.CustomerRepositoryPort;
 import ec.nexo.customer.application.port.out.ExperienceRepositoryPort;
 import ec.nexo.customer.application.port.out.PreferencesRepositoryPort;
+import ec.nexo.customer.application.usecase.DiscardCustomerUseCase;
 import ec.nexo.customer.application.usecase.GetHomeExperienceUseCase;
 import ec.nexo.customer.application.usecase.GetMyProfileUseCase;
 import ec.nexo.customer.application.usecase.ProvisionCustomerUseCase;
@@ -46,5 +47,10 @@ class UseCaseConfig {
     ProvisionCustomerUseCase provisionCustomerUseCase(CustomerRepositoryPort customers, Clock clock,
                                                       ExperienceProperties properties) {
         return new ProvisionCustomerUseCase(customers, clock, properties.zone());
+    }
+
+    @Bean
+    DiscardCustomerUseCase discardCustomerUseCase(CustomerRepositoryPort customers) {
+        return new DiscardCustomerUseCase(customers);
     }
 }

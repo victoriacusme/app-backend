@@ -15,4 +15,7 @@ public interface CustomerRepositoryPort {
      * @throws DuplicateCustomerException si el cliente ya existe (alta simultánea)
      */
     void create(Customer customer, Preferences preferences);
+
+    /** Borra el cliente y sus preferencias. No falla si no existe. */
+    void deleteById(UUID id);
 }

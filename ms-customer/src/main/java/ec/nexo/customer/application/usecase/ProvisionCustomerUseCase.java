@@ -44,6 +44,12 @@ public class ProvisionCustomerUseCase {
 
     public record NewCustomer(UUID customerId, String fullName, String idNumber, String email, String phone,
                               LocalDate birthDate) {
+
+        /** Nunca imprime datos personales. */
+        @Override
+        public String toString() {
+            return "NewCustomer[customerId=" + customerId + "]";
+        }
     }
 
     public record Result(Customer customer, boolean created) {

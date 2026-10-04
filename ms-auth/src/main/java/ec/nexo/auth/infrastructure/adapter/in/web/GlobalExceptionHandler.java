@@ -46,7 +46,7 @@ class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(ProvisioningFailedException.class)
     ProblemDetail handleProvisioning(ProvisioningFailedException e) {
-        log.error("Fallo en el onboarding: {}", e.getMessage(), e.getCause());
+        log.error("Fallo en el onboarding: {}", e.getMessage(), e);
         return problem(HttpStatus.SERVICE_UNAVAILABLE, "onboarding-unavailable",
                 "No pudimos completar el registro en este momento. Intenta nuevamente.");
     }

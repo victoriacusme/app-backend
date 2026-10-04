@@ -8,7 +8,16 @@ public interface CustomerProvisioningPort {
 
     void provision(NewCustomer customer);
 
+    /** Compensación: descarta un cliente recién provisionado cuando el onboarding no pudo completarse. */
+    void discard(UUID customerId);
+
     record NewCustomer(UUID customerId, String fullName, String idNumber, String email,
                        String phone, LocalDate birthDate) {
+
+        /** Nunca imprime datos personales. */
+        @Override
+        public String toString() {
+            return "NewCustomer[customerId=" + customerId + "]";
+        }
     }
 }

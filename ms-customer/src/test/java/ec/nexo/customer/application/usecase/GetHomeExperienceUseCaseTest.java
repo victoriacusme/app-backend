@@ -60,7 +60,7 @@ class GetHomeExperienceUseCaseTest {
         when(preferences.findByCustomerId(customerId)).thenReturn(Optional.empty());
         when(experiences.findActiveByScreen("home")).thenReturn(List.of(new ExperienceComponent(UUID.randomUUID(),
                 "greeting", "home", null, "greeting", 10, Map.of("title", "{greeting}, {firstName}"), true, false,
-                null, null, null, null)));
+                null, null, null, null, null)));
 
         Experience home = useCase.execute(customerId);
 

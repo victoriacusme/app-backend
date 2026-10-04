@@ -60,6 +60,9 @@ class ExperienceComponentEntity {
     @Column(name = "hour_to")
     private Short hourTo;
 
+    @Column(name = "customer_id")
+    private UUID customerId;
+
     protected ExperienceComponentEntity() {
     }
 
@@ -113,5 +116,9 @@ class ExperienceComponentEntity {
 
     Integer getHourTo() {
         return hourTo == null ? null : hourTo.intValue();
+    }
+
+    UUID getCustomerId() {
+        return customerId;
     }
 }

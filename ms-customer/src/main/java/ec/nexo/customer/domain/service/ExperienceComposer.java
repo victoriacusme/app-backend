@@ -28,7 +28,7 @@ public class ExperienceComposer {
 
         List<Experience.Component> components = configured.stream()
                 .filter(c -> c.screen().equals(screen))
-                .filter(c -> c.isVisibleTo(customer.segment(), preferences, now.toInstant(), localHour))
+                .filter(c -> c.isVisibleTo(customer, preferences, now.toInstant(), localHour))
                 .sorted(Comparator.comparingInt(ExperienceComponent::position))
                 .map(c -> new Experience.Component(c.id(), c.type(), personalize(c.props(), placeholders)))
                 .toList();

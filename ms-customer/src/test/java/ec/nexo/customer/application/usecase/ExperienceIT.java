@@ -27,10 +27,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Experiencia server-driven completa contra PostgreSQL real: semilla, JSONB, composer y cambios en vivo en BD. */
-@SpringBootTest
+@SpringBootTest(properties = "nexo.crypto.data-key=" + ExperienceIT.TEST_DATA_KEY)
 @Testcontainers
 class ExperienceIT {
 
+    static final String TEST_DATA_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
     private static final UUID ANA = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID CARLOS = UUID.fromString("22222222-2222-2222-2222-222222222222");
     private static final UUID LUCIA = UUID.fromString("33333333-3333-3333-3333-333333333333");
@@ -45,6 +46,8 @@ class ExperienceIT {
     private UpdatePreferencesUseCase updatePreferences;
     @Autowired
     private ProvisionCustomerUseCase provisionCustomer;
+    @Autowired
+    private DiscardCustomerUseCase discardCustomer;
     @Autowired
     private CustomerRepositoryPort customers;
     @Autowired
@@ -114,6 +117,58 @@ class ExperienceIT {
                 .containsExactly("greeting", "accounts_summary", "quick_actions");
         assertThat(jdbc.queryForObject("SELECT email FROM customers WHERE id = ?", String.class, id))
                 .isEqualTo("pedro@nexo.ec");
+    }
+
+    @Test
+    void descartarUnClienteBorraSusPreferenciasYEsIdempotente() {
+        UUID id = UUID.randomUUID();
+        provisionCustomer.execute(new NewCustomer(id, "Temporal", "1700000009", "t@nexo.ec", "+593990000009",
+                LocalDate.of(1990, 1, 1)));
+
+        discardCustomer.execute(id);
+        discardCustomer.execute(id);
+
+        assertThat(customers.findById(id)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM preferences WHERE customer_id = ?", Integer.class, id))
+                .isZero();
+    }
+
+    @Test
+    void laCedulaYElTelefonoQuedanCifradosEnLaBaseDeDatos() {
+        UUID id = UUID.randomUUID();
+        provisionCustomer.execute(new NewCustomer(id, "Pedro Ruiz", "1700000001", "pedro@nexo.ec", "+593990000001",
+                LocalDate.of(1985, 3, 3)));
+
+        Map<String, Object> row = jdbc.queryForMap("SELECT id_number, phone FROM customers WHERE id = ?", id);
+        assertThat((String) row.get("id_number")).startsWith("v1:").doesNotContain("1700000001");
+        assertThat((String) row.get("phone")).startsWith("v1:").doesNotContain("593990000001");
+
+        Customer read = customers.findById(id).orElseThrow();
+        assertThat(read.idNumber()).isEqualTo("1700000001");
+        assertThat(read.phone()).isEqualTo("+593990000001");
+    }
+
+    @Test
+    void laMigracionV101CifroLosDatosDeLaSemilla() {
+        Integer plaintextRows = jdbc.queryForObject(
+                "SELECT count(*) FROM customers WHERE id_number NOT LIKE 'v1:%' OR phone NOT LIKE 'v1:%'",
+                Integer.class);
+
+        assertThat(plaintextRows).isZero();
+        assertThat(customers.findById(ANA).orElseThrow().idNumber()).isEqualTo("1712345678");
+    }
+
+    @Test
+    void unClienteJovenNuevoNoRecibeLaMetaDeAhorroDeAna() {
+        UUID id = UUID.randomUUID();
+        provisionCustomer.execute(new NewCustomer(id, "Sofía Vera", "1700000003", "sofia@nexo.ec", "+593990000003",
+                LocalDate.now().minusYears(20)));
+
+        Experience home = getHome.execute(id);
+
+        assertThat(home.segment()).isEqualTo(Segment.YOUNG);
+        assertThat(home.components()).extracting(Experience.Component::type).doesNotContain("savings_goal");
+        assertThat(types(ANA)).contains("savings_goal");
     }
 
     @Test

@@ -37,6 +37,9 @@ nexo:
     internal-api-key: ${INTERNAL_API_KEY:dev-internal-key-change-me}
   experience:
     zone: ${EXPERIENCE_ZONE:America/Guayaquil}
+  crypto:
+    # Clave AES-256 en Base64 para cifrar cédula y teléfono. Obligatoria: sin ella el servicio no arranca.
+    data-key: ${CUSTOMER_DATA_KEY:}
 
 logging:
   pattern:

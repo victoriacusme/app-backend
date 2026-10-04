@@ -82,6 +82,8 @@ services:
     environment:
       <<: *ms-env
       DB_URL: jdbc:postgresql://customer-db:5432/customer_db
+      # Clave de cifrado de cédula y teléfono. Esta es SOLO de desarrollo; en otros entornos va en un gestor de secretos.
+      CUSTOMER_DATA_KEY: ${CUSTOMER_DATA_KEY:-E8224wTBNfSLRE51ql6zBlEBm2mleb5kcM2BqZHMYkM=}
       JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
     ports:
       - "8082:8082"

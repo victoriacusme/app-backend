@@ -44,6 +44,13 @@ class CustomerRepositoryAdapter implements CustomerRepositoryPort {
         }
     }
 
+    @Override
+    @Transactional
+    public void deleteById(UUID id) {
+        // Las preferencias se borran en cascada (FK ON DELETE CASCADE).
+        customers.deleteById(id);
+    }
+
     private static Customer toDomain(CustomerEntity entity) {
         return new Customer(entity.getId(), entity.getFullName(), entity.getIdNumber(), entity.getEmail(),
                 entity.getPhone(), entity.getBirthDate(), entity.getSegment(), entity.getCreatedAt());

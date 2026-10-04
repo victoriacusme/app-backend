@@ -4,6 +4,7 @@ import ec.nexo.auth.application.port.out.AccountProvisioningPort;
 import ec.nexo.auth.application.port.out.CustomerProvisioningPort;
 import ec.nexo.auth.application.port.out.CustomerProvisioningPort.NewCustomer;
 import ec.nexo.auth.application.port.out.PasswordHasherPort;
+import ec.nexo.auth.application.port.out.ProvisioningFailedException;
 import ec.nexo.auth.application.port.out.UserRepositoryPort;
 import ec.nexo.auth.domain.exception.UsernameTakenException;
 import ec.nexo.auth.domain.model.AuthTokens;
@@ -14,10 +15,11 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Onboarding síncrono: provisiona el cliente y su cuenta por defecto y, solo si ambos responden bien,
- * crea las credenciales. No se abre una transacción de BD mientras se espera a los otros servicios.
- * Ambas provisiones son idempotentes por {@code customerId}, así que un fallo intermedio no deja
- * credenciales huérfanas: como mucho queda un cliente sin usuario, que no puede autenticarse.
+ * Onboarding síncrono con compensación: provisiona el cliente y su cuenta por defecto y, solo si ambos
+ * responden bien, crea las credenciales. No se abre una transacción de BD mientras se espera a los otros servicios.
+ * Si la cuenta no se puede abrir, se descarta el cliente recién creado (mejor esfuerzo). Un fallo nunca deja
+ * credenciales sin cliente: como mucho, si también falla la compensación, queda un cliente sin usuario,
+ * que no puede autenticarse. Cada intento usa un {@code customerId} nuevo, así que reintentar es seguro.
  */
 public class RegisterUseCase {
 
@@ -49,14 +51,34 @@ public class RegisterUseCase {
         UUID customerId = UUID.randomUUID();
         customerProvisioning.provision(new NewCustomer(customerId, command.fullName(), command.idNumber(),
                 command.email(), command.phone(), command.birthDate()));
-        accountProvisioning.openDefaultAccount(customerId);
+        try {
+            accountProvisioning.openDefaultAccount(customerId);
+        } catch (ProvisioningFailedException e) {
+            discardCustomer(customerId, e);
+            throw e;
+        }
 
         User user = users.save(User.register(username, customerId, passwordHasher.hash(command.password()),
                 clock.instant()));
         return sessionIssuer.open(user, command.deviceId());
     }
 
+    private void discardCustomer(UUID customerId, ProvisioningFailedException cause) {
+        try {
+            customerProvisioning.discard(customerId);
+        } catch (RuntimeException compensationError) {
+            // No oculta el error original: queda adjunto para el log.
+            cause.addSuppressed(compensationError);
+        }
+    }
+
     public record RegisterCommand(String username, String password, String fullName, String idNumber,
                                   String email, String phone, LocalDate birthDate, String deviceId) {
+
+        /** Nunca imprime la contraseña ni datos personales. */
+        @Override
+        public String toString() {
+            return "RegisterCommand[username=" + username + ", deviceId=" + deviceId + "]";
+        }
     }
 }

@@ -95,7 +95,7 @@ class ExperienceComposerTest {
     @Test
     void respetaLaFranjaHorariaLocal() {
         var lunch = new ExperienceComponent(UUID.randomUUID(), "almuerzo", "home", null, "promo_banner", 10,
-                Map.of(), true, false, null, null, 12, 15);
+                Map.of(), true, false, null, null, 12, 15, null);
 
         assertThat(compose(customer(Segment.YOUNG), prefs(true), List.of(lunch)).components()).isEmpty();
         assertThat(composer.compose("home", customer(Segment.YOUNG), prefs(true), List.of(lunch),
@@ -103,12 +103,24 @@ class ExperienceComposerTest {
     }
 
     @Test
+    void unComponenteDirigidoAUnClienteSoloLoVeEseCliente() {
+        Customer ana = customer(Segment.YOUNG);
+        Customer otroJoven = customer(Segment.YOUNG);
+        var goalOfAna = List.of(new ExperienceComponent(UUID.randomUUID(), "meta-ana", "home", Segment.YOUNG,
+                "savings_goal", 40, Map.of("accountId", "cuenta-de-ana"), true, false, null, null, null, null,
+                ana.id()));
+
+        assertThat(types(compose(ana, prefs(true), goalOfAna))).containsExactly("savings_goal");
+        assertThat(compose(otroJoven, prefs(true), goalOfAna).components()).isEmpty();
+    }
+
+    @Test
     void ignoraLosComponentesInactivosYLosDeOtraPantalla() {
         var others = List.of(
                 new ExperienceComponent(UUID.randomUUID(), "apagado", "home", null, "promo_banner", 10, Map.of(),
-                        false, false, null, null, null, null),
+                        false, false, null, null, null, null, null),
                 new ExperienceComponent(UUID.randomUUID(), "perfil", "profile", null, "banner", 10, Map.of(),
-                        true, false, null, null, null, null));
+                        true, false, null, null, null, null, null));
 
         assertThat(compose(customer(Segment.YOUNG), prefs(true), others).components()).isEmpty();
     }
@@ -144,16 +156,16 @@ class ExperienceComposerTest {
     private static ExperienceComponent component(String name, Segment segment, String type, int position,
                                                  Map<String, Object> props) {
         return new ExperienceComponent(UUID.randomUUID(), name, "home", segment, type, position, props, true, false,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     private static ExperienceComponent promotion(String name, Segment segment, int position) {
         return new ExperienceComponent(UUID.randomUUID(), name, "home", segment, "promo_banner", position, Map.of(),
-                true, true, null, null, null, null);
+                true, true, null, null, null, null, null);
     }
 
     private static ExperienceComponent campaign(String name, Instant startsAt, Instant endsAt) {
         return new ExperienceComponent(UUID.randomUUID(), name, "home", null, "promo_banner", 10,
-                Map.of("name", name), true, false, startsAt, endsAt, null, null);
+                Map.of("name", name), true, false, startsAt, endsAt, null, null, null);
     }
 }
