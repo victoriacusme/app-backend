@@ -1,0 +1,28 @@
+server:
+  port: ${SERVER_PORT:8081}
+  shutdown: graceful
+
+spring:
+  application:
+    name: ms-auth
+  # Base de datos desactivada mientras solo existe la estructura del proyecto.
+  # Para conectarla: borrar "autoconfigure.exclude" y descomentar "datasource".
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+#  datasource:
+#    url: ${DB_URL:jdbc:postgresql://localhost:5433/auth_db}
+#    username: ${DB_USER:nexo}
+#    password: ${DB_PASSWORD:nexo}
+#  jpa:
+#    open-in-view: false
+#    hibernate:
+#      ddl-auto: validate
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

@@ -1,0 +1,19 @@
+# --- General ---
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/*
+*.iml
+
+# --- Java / Maven ---
+target/
+*.class
+hs_err_pid*
+
+# --- Secretos / claves ---
+*.pem
+*.p12
+*.jks

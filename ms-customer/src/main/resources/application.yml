@@ -1,0 +1,33 @@
+server:
+  port: ${SERVER_PORT:8082}
+  shutdown: graceful
+
+spring:
+  application:
+    name: ms-customer
+  # Base de datos desactivada mientras solo existe la estructura del proyecto.
+  # Para conectarla: borrar "autoconfigure.exclude" y descomentar "datasource".
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+#  datasource:
+#    url: ${DB_URL:jdbc:postgresql://localhost:5434/customer_db}
+#    username: ${DB_USER:nexo}
+#    password: ${DB_PASSWORD:nexo}
+#  jpa:
+#    open-in-view: false
+#    hibernate:
+#      ddl-auto: validate
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${JWT_JWKS_URI:http://localhost:8081/.well-known/jwks.json}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
