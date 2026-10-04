@@ -190,6 +190,8 @@ Variables principales (ver `.env.example`):
 
 - [`docs/security.md`](docs/security.md): autenticación, JWE, cifrado en reposo, servicio a servicio (mTLS), logs
   sin datos personales y gestión de secretos.
+- [`docs/monitoring.md`](docs/monitoring.md): monitoreo en producción, SLO, alertas y cómo detectar problemas
+  operativos y de experiencia de usuario.
 
 ## Solución de problemas
 
