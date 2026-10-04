@@ -1,0 +1,120 @@
+name: nexo
+
+# Credenciales solo para desarrollo local. Se pueden sobrescribir con un archivo .env (ver .env.example).
+x-db-env: &db-env
+  POSTGRES_USER: ${DB_USER:-nexo}
+  POSTGRES_PASSWORD: ${DB_PASSWORD:-nexo}
+
+x-db-healthcheck: &db-healthcheck
+  test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+
+x-ms-env: &ms-env
+  DB_USER: ${DB_USER:-nexo}
+  DB_PASSWORD: ${DB_PASSWORD:-nexo}
+  INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+  JAVA_OPTS: -XX:MaxRAMPercentage=75
+
+services:
+  # --- Bases de datos (una por microservicio) ---
+  auth-db:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: auth_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    healthcheck: *db-healthcheck
+
+  customer-db:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: customer_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - customer-db-data:/var/lib/postgresql/data
+    healthcheck: *db-healthcheck
+
+  accounts-db:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: accounts_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - accounts-db-data:/var/lib/postgresql/data
+    healthcheck: *db-healthcheck
+
+  # --- Microservicios ---
+  ms-auth:
+    build: ./ms-auth
+    image: nexo/ms-auth:0.1.0
+    environment:
+      <<: *ms-env
+      DB_URL: jdbc:postgresql://auth-db:5432/auth_db
+      CUSTOMER_SERVICE_URL: http://ms-customer:8082
+      ACCOUNTS_SERVICE_URL: http://ms-accounts:8083
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-}
+      JWT_ENCRYPTION_KEY: ${JWT_ENCRYPTION_KEY:-}
+    ports:
+      - "8081:8081"
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  ms-customer:
+    build: ./ms-customer
+    image: nexo/ms-customer:0.1.0
+    environment:
+      <<: *ms-env
+      DB_URL: jdbc:postgresql://customer-db:5432/customer_db
+      JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
+    ports:
+      - "8082:8082"
+    depends_on:
+      customer-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  ms-accounts:
+    build: ./ms-accounts
+    image: nexo/ms-accounts:0.1.0
+    environment:
+      <<: *ms-env
+      DB_URL: jdbc:postgresql://accounts-db:5432/accounts_db
+      JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
+    ports:
+      - "8083:8083"
+    depends_on:
+      accounts-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  auth-db-data:
+  customer-db-data:
+  accounts-db-data:
