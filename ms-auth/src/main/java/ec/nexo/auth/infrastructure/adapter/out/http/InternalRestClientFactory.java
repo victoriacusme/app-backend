@@ -1,6 +1,8 @@
 package ec.nexo.auth.infrastructure.adapter.out.http;
 
+import ec.nexo.auth.infrastructure.adapter.in.web.CorrelationIdFilter;
 import ec.nexo.auth.infrastructure.config.ServicesProperties;
+import org.slf4j.MDC;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -31,6 +33,14 @@ class InternalRestClientFactory {
                 .baseUrl(baseUrl)
                 .requestFactory(requestFactory)
                 .defaultHeader(API_KEY_HEADER, properties.internalApiKey())
+                // Propaga el correlation-id de la petición original para seguir el onboarding entre servicios.
+                .requestInterceptor((request, body, execution) -> {
+                    String correlationId = MDC.get(CorrelationIdFilter.MDC_KEY);
+                    if (correlationId != null) {
+                        request.getHeaders().set(CorrelationIdFilter.HEADER, correlationId);
+                    }
+                    return execution.execute(request, body);
+                })
                 .build();
     }
 }

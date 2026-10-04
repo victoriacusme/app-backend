@@ -19,6 +19,10 @@ spring:
         jwt:
           jwk-set-uri: ${JWT_JWKS_URI:http://localhost:8081/.well-known/jwks.json}
 
+logging:
+  pattern:
+    correlation: "[%X{correlationId:-}] "
+
 management:
   endpoints:
     web:

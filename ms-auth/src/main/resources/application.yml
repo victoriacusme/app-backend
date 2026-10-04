@@ -33,6 +33,10 @@ nexo:
     connect-timeout: 2s
     read-timeout: 5s
 
+logging:
+  pattern:
+    correlation: "[%X{correlationId:-}] "
+
 management:
   endpoints:
     web:
