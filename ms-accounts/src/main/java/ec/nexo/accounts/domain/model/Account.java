@@ -1,5 +1,8 @@
 package ec.nexo.accounts.domain.model;
 
+import ec.nexo.accounts.domain.exception.AccountNotActiveException;
+import ec.nexo.accounts.domain.exception.InsufficientFundsException;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
@@ -19,8 +22,8 @@ public class Account {
     private final String alias;
     private final boolean isDefault;
     private final Instant createdAt;
+    private final AccountStatus status;
     private BigDecimal balance;
-    private AccountStatus status;
 
     private Account(UUID id, UUID customerId, String number, AccountType type, String currency, BigDecimal balance,
                     AccountStatus status, String alias, boolean isDefault, Instant createdAt) {
@@ -46,6 +49,29 @@ public class Account {
                                   BigDecimal balance, AccountStatus status, String alias, boolean isDefault,
                                   Instant createdAt) {
         return new Account(id, customerId, number, type, currency, balance, status, alias, isDefault, createdAt);
+    }
+
+    public void debit(BigDecimal amount) {
+        requireActive();
+        if (balance.compareTo(amount) < 0) {
+            throw new InsufficientFundsException();
+        }
+        balance = balance.subtract(amount);
+    }
+
+    public void credit(BigDecimal amount) {
+        requireActive();
+        balance = balance.add(amount);
+    }
+
+    public boolean isOwnedBy(UUID customerId) {
+        return this.customerId.equals(customerId);
+    }
+
+    private void requireActive() {
+        if (status != AccountStatus.ACTIVE) {
+            throw new AccountNotActiveException();
+        }
     }
 
     /** Número enmascarado para exponer fuera del servicio, p. ej. {@code ****4521}. */

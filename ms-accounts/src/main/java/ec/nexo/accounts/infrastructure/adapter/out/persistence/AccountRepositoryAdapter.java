@@ -6,6 +6,7 @@ import ec.nexo.accounts.domain.model.Account;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,6 +50,19 @@ class AccountRepositoryAdapter implements AccountRepositoryPort {
     @Override
     public String nextAccountNumber() {
         return String.valueOf(repository.nextAccountNumber());
+    }
+
+    @Override
+    public List<Account> findAllByIdForUpdate(Collection<UUID> ids) {
+        return repository.findAllByIdInForUpdate(ids).stream().map(AccountRepositoryAdapter::toDomain).toList();
+    }
+
+    /** La entidad ya está en el contexto de persistencia (la cargó el bloqueo): el cambio se guarda al confirmar. */
+    @Override
+    public void updateBalance(Account account) {
+        AccountEntity entity = repository.findById(account.id())
+                .orElseThrow(() -> new IllegalStateException("La cuenta " + account.id() + " no existe"));
+        entity.changeBalance(account.balance());
     }
 
     private static AccountEntity toEntity(Account account) {

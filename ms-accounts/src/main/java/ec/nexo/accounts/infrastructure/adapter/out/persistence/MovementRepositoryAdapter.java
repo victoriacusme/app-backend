@@ -25,8 +25,18 @@ class MovementRepositoryAdapter implements MovementRepositoryPort {
         return entities.stream().map(MovementRepositoryAdapter::toDomain).toList();
     }
 
+    @Override
+    public void saveAll(List<Movement> movements) {
+        repository.saveAll(movements.stream().map(MovementRepositoryAdapter::toEntity).toList());
+    }
+
+    private static MovementEntity toEntity(Movement movement) {
+        return new MovementEntity(movement.id(), movement.accountId(), movement.type(), movement.amount(),
+                movement.balanceAfter(), movement.description(), movement.bookedAt(), movement.transferId());
+    }
+
     private static Movement toDomain(MovementEntity entity) {
         return new Movement(entity.getId(), entity.getAccountId(), entity.getType(), entity.getAmount(),
-                entity.getBalanceAfter(), entity.getDescription(), entity.getBookedAt());
+                entity.getBalanceAfter(), entity.getDescription(), entity.getBookedAt(), entity.getTransferId());
     }
 }

@@ -112,7 +112,7 @@ class AccountControllerTest {
     void losMovimientosDevuelvenUnCursorOpacoQueSePuedeReenviar() throws Exception {
         UUID accountId = UUID.randomUUID();
         Movement movement = new Movement(UUID.randomUUID(), accountId, MovementType.DEBIT, new BigDecimal("12.5"),
-                new BigDecimal("1238.00"), "Supermercado", NOW);
+                new BigDecimal("1238.00"), "Supermercado", NOW, null);
         MovementCursor next = MovementCursor.of(movement);
         when(getAccountMovements.execute(ANA, accountId, null, 1)).thenReturn(new MovementPage(List.of(movement), next));
         when(getAccountMovements.execute(eq(ANA), eq(accountId), eq(next), isNull()))

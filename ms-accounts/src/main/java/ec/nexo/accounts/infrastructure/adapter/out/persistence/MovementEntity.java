@@ -6,7 +6,11 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import org.springframework.data.domain.Persistable;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -14,7 +18,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "movements")
-class MovementEntity {
+class MovementEntity implements Persistable<UUID> {
 
     @Id
     private UUID id;
@@ -38,10 +42,41 @@ class MovementEntity {
     @Column(name = "booked_at", nullable = false)
     private Instant bookedAt;
 
+    @Column(name = "transfer_id")
+    private UUID transferId;
+
+    // Los movimientos solo se insertan: evita el SELECT previo que hace save() con ids asignados.
+    @Transient
+    private boolean isNew = true;
+
     protected MovementEntity() {
     }
 
-    UUID getId() {
+    MovementEntity(UUID id, UUID accountId, MovementType type, BigDecimal amount, BigDecimal balanceAfter,
+                   String description, Instant bookedAt, UUID transferId) {
+        this.id = id;
+        this.accountId = accountId;
+        this.type = type;
+        this.amount = amount;
+        this.balanceAfter = balanceAfter;
+        this.description = description;
+        this.bookedAt = bookedAt;
+        this.transferId = transferId;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markNotNew() {
+        isNew = false;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    @Override
+    public UUID getId() {
         return id;
     }
 
@@ -67,5 +102,9 @@ class MovementEntity {
 
     Instant getBookedAt() {
         return bookedAt;
+    }
+
+    UUID getTransferId() {
+        return transferId;
     }
 }

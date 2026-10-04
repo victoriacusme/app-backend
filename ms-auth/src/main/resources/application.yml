@@ -16,6 +16,9 @@ spring:
   flyway:
     # db/seed carga los usuarios de prueba. En producción: FLYWAY_LOCATIONS=classpath:db/migration
     locations: ${FLYWAY_LOCATIONS:classpath:db/migration,classpath:db/seed}
+    # Las semillas usan V100+: sin esto, una migración nueva del esquema (V2, V3...) no se aplicaría en una BD
+    # de desarrollo que ya tiene la semilla. En producción no hay semillas y el orden es el natural.
+    out-of-order: ${FLYWAY_OUT_OF_ORDER:true}
 
 nexo:
   security:

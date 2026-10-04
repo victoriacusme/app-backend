@@ -133,8 +133,10 @@ services:
   # --- Gateway: única entrada para la app (http://localhost:8080; en el emulador Android, 10.0.2.2:8080) ---
   gateway:
     image: nginx:1.27-alpine
+    # Se monta la carpeta (no el archivo suelto) para que las ediciones se vean con un simple "nginx -s reload".
+    command: ["nginx", "-c", "/etc/nginx/nexo/nginx.conf", "-g", "daemon off;"]
     volumes:
-      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway:/etc/nginx/nexo:ro
     ports:
       - "8080:8080"
     depends_on:

@@ -23,8 +23,18 @@ final class Fixtures {
                 new BigDecimal("1250.50"), AccountStatus.ACTIVE, "Ahorros", true, NOW);
     }
 
+    static Account account(UUID customerId, String number, String balance) {
+        return Account.restore(UUID.randomUUID(), customerId, number, AccountType.SAVINGS, "USD",
+                new BigDecimal(balance), AccountStatus.ACTIVE, null, false, NOW);
+    }
+
+    static Account blockedAccount(UUID customerId, String balance) {
+        return Account.restore(UUID.randomUUID(), customerId, "2200099999", AccountType.SAVINGS, "USD",
+                new BigDecimal(balance), AccountStatus.BLOCKED, null, false, NOW);
+    }
+
     static Movement movement(UUID accountId, int minutesAgo) {
         return new Movement(UUID.randomUUID(), accountId, MovementType.DEBIT, new BigDecimal("10.00"),
-                new BigDecimal("100.00"), "Compra", NOW.minusSeconds(minutesAgo * 60L));
+                new BigDecimal("100.00"), "Compra", NOW.minusSeconds(minutesAgo * 60L), null);
     }
 }

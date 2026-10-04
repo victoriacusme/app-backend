@@ -66,6 +66,10 @@ class AccountEntity {
         this.createdAt = createdAt;
     }
 
+    void changeBalance(BigDecimal balance) {
+        this.balance = balance;
+    }
+
     UUID getId() {
         return id;
     }

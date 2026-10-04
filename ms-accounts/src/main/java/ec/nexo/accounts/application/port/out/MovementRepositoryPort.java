@@ -10,4 +10,6 @@ public interface MovementRepositoryPort {
 
     /** Movimientos del más reciente al más antiguo, a partir del cursor (excluido) o desde el inicio si es nulo. */
     List<Movement> findPage(UUID accountId, MovementCursor after, int limit);
+
+    void saveAll(List<Movement> movements);
 }
