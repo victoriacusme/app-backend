@@ -4,11 +4,16 @@ import ec.nexo.customer.application.usecase.CustomerProfile;
 import ec.nexo.customer.application.usecase.DiscardCustomerUseCase;
 import ec.nexo.customer.application.usecase.GetHomeExperienceUseCase;
 import ec.nexo.customer.application.usecase.GetMyProfileUseCase;
+import ec.nexo.customer.application.usecase.NotifyCustomerUseCase;
 import ec.nexo.customer.application.usecase.ProvisionCustomerUseCase;
+import ec.nexo.customer.application.usecase.RegisterDeviceUseCase;
+import ec.nexo.customer.application.usecase.UnregisterDeviceUseCase;
 import ec.nexo.customer.application.usecase.UpdatePreferencesUseCase;
 import ec.nexo.customer.domain.exception.CustomerNotFoundException;
 import ec.nexo.customer.domain.model.Customer;
+import ec.nexo.customer.domain.model.DevicePlatform;
 import ec.nexo.customer.domain.model.Experience;
+import ec.nexo.customer.domain.model.NotificationType;
 import ec.nexo.customer.domain.model.Preferences;
 import ec.nexo.customer.domain.model.Segment;
 import ec.nexo.customer.domain.model.Theme;
@@ -46,12 +51,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(controllers = {CustomerController.class, ExperienceController.class, InternalCustomerController.class})
+@WebMvcTest(controllers = {CustomerController.class, ExperienceController.class, InternalCustomerController.class,
+        DeviceController.class, InternalNotificationController.class})
 @Import({SecurityConfig.class, CustomerApiTest.EtagConfig.class})
 @EnableConfigurationProperties(SecurityProperties.class)
 @TestPropertySource(properties = "nexo.security.internal-api-key=test-internal-key")
@@ -82,6 +89,12 @@ class CustomerApiTest {
     private ProvisionCustomerUseCase provisionCustomer;
     @MockitoBean
     private DiscardCustomerUseCase discardCustomer;
+    @MockitoBean
+    private RegisterDeviceUseCase registerDevice;
+    @MockitoBean
+    private UnregisterDeviceUseCase unregisterDevice;
+    @MockitoBean
+    private NotifyCustomerUseCase notifyCustomer;
     @MockitoBean
     private JwtDecoder jwtDecoder;
 
@@ -204,6 +217,46 @@ class CustomerApiTest {
         mvc.perform(delete("/internal/customers/{id}", customerId).header("X-Internal-Api-Key", "test-internal-key"))
                 .andExpect(status().isNoContent());
         verify(discardCustomer).execute(customerId);
+    }
+
+    @Test
+    void laAppRegistraYBorraSuTokenDePush() throws Exception {
+        mvc.perform(put("/customers/me/devices").with(as(ANA)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"fcm:token-123\",\"platform\":\"ANDROID\"}"))
+                .andExpect(status().isNoContent());
+        verify(registerDevice).execute(ANA, "fcm:token-123", DevicePlatform.ANDROID);
+
+        mvc.perform(delete("/customers/me/devices/{token}", "fcm:token-123").with(as(ANA)))
+                .andExpect(status().isNoContent());
+        verify(unregisterDevice).execute(ANA, "fcm:token-123");
+    }
+
+    @Test
+    void validaElRegistroDelDispositivo() throws Exception {
+        mvc.perform(put("/customers/me/devices").with(as(ANA)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"\",\"platform\":\"ANDROID\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.token").exists());
+        mvc.perform(put("/customers/me/devices").with(as(ANA)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"t\",\"platform\":\"WINDOWS\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(registerDevice);
+    }
+
+    @Test
+    void lasNotificacionesInternasExigenApiKey() throws Exception {
+        String body = "{\"customerId\":\"" + ANA + "\",\"type\":\"TRANSFER_COMPLETED\",\"data\":{\"transferId\":\"t-1\"}}";
+
+        mvc.perform(post("/internal/notifications").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(notifyCustomer);
+
+        when(notifyCustomer.execute(eq(ANA), eq(NotificationType.TRANSFER_COMPLETED), any()))
+                .thenReturn(new NotifyCustomerUseCase.Result(2, 0, 0, null));
+        mvc.perform(post("/internal/notifications").header("X-Internal-Api-Key", "test-internal-key")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.delivered").value(2));
     }
 
     private static RequestPostProcessor as(UUID customerId) {

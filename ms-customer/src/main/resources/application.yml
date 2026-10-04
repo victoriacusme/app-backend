@@ -37,6 +37,9 @@ nexo:
     internal-api-key: ${INTERNAL_API_KEY:dev-internal-key-change-me}
   experience:
     zone: ${EXPERIENCE_ZONE:America/Guayaquil}
+  push:
+    # Cuenta de servicio de Firebase (JSON). Vacío: las notificaciones push se registran en el log (demo).
+    fcm-credentials-file: ${FCM_CREDENTIALS_FILE:}
   crypto:
     # Clave AES-256 en Base64 para cifrar cédula y teléfono. Obligatoria: sin ella el servicio no arranca.
     data-key: ${CUSTOMER_DATA_KEY:}

@@ -1,9 +1,10 @@
 package ec.nexo.accounts.application.port.out;
 
-import ec.nexo.accounts.domain.model.Transfer;
-
-/** Aviso al cliente de una operación. Las implementaciones nunca deben hacer fallar la operación de negocio. */
+/**
+ * Aviso al cliente de una operación. Las implementaciones nunca deben hacer fallar la operación de negocio
+ * y solo deben avisar si la transacción se confirma.
+ */
 public interface NotificationPort {
 
-    void transferCompleted(Transfer transfer);
+    void transferCompleted(TransferNotification notification);
 }

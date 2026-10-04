@@ -103,6 +103,7 @@ services:
     environment:
       <<: *ms-env
       DB_URL: jdbc:postgresql://accounts-db:5432/accounts_db
+      CUSTOMER_SERVICE_URL: http://ms-customer:8082
       JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
     ports:
       - "8083:8083"

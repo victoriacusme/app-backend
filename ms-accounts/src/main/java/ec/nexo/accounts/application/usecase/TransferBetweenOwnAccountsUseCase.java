@@ -3,6 +3,7 @@ package ec.nexo.accounts.application.usecase;
 import ec.nexo.accounts.application.port.out.AccountRepositoryPort;
 import ec.nexo.accounts.application.port.out.MovementRepositoryPort;
 import ec.nexo.accounts.application.port.out.NotificationPort;
+import ec.nexo.accounts.application.port.out.TransferNotification;
 import ec.nexo.accounts.application.port.out.TransferRepositoryPort;
 import ec.nexo.accounts.domain.exception.AccountNotFoundException;
 import ec.nexo.accounts.domain.exception.AccountNotOwnedException;
@@ -87,7 +88,8 @@ public class TransferBetweenOwnAccountsUseCase {
         accounts.updateBalance(target);
         movements.saveAll(List.of(Movement.debitOf(transfer, source, target),
                 Movement.creditOf(transfer, source, target)));
-        notifications.transferCompleted(transfer);
+        notifications.transferCompleted(new TransferNotification(command.customerId(), transfer.id(),
+                transfer.amount(), transfer.currency(), target.maskedNumber()));
         return new Result(transfer, false);
     }
 

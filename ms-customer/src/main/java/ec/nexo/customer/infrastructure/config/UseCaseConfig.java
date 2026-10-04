@@ -1,14 +1,20 @@
 package ec.nexo.customer.infrastructure.config;
 
 import ec.nexo.customer.application.port.out.CustomerRepositoryPort;
+import ec.nexo.customer.application.port.out.DeviceTokenRepositoryPort;
 import ec.nexo.customer.application.port.out.ExperienceRepositoryPort;
 import ec.nexo.customer.application.port.out.PreferencesRepositoryPort;
+import ec.nexo.customer.application.port.out.PushSenderPort;
 import ec.nexo.customer.application.usecase.DiscardCustomerUseCase;
 import ec.nexo.customer.application.usecase.GetHomeExperienceUseCase;
 import ec.nexo.customer.application.usecase.GetMyProfileUseCase;
+import ec.nexo.customer.application.usecase.NotifyCustomerUseCase;
 import ec.nexo.customer.application.usecase.ProvisionCustomerUseCase;
+import ec.nexo.customer.application.usecase.RegisterDeviceUseCase;
+import ec.nexo.customer.application.usecase.UnregisterDeviceUseCase;
 import ec.nexo.customer.application.usecase.UpdatePreferencesUseCase;
 import ec.nexo.customer.domain.service.ExperienceComposer;
+import ec.nexo.customer.domain.service.NotificationTemplates;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -52,5 +58,22 @@ class UseCaseConfig {
     @Bean
     DiscardCustomerUseCase discardCustomerUseCase(CustomerRepositoryPort customers) {
         return new DiscardCustomerUseCase(customers);
+    }
+
+    @Bean
+    RegisterDeviceUseCase registerDeviceUseCase(CustomerRepositoryPort customers, DeviceTokenRepositoryPort devices) {
+        return new RegisterDeviceUseCase(customers, devices);
+    }
+
+    @Bean
+    UnregisterDeviceUseCase unregisterDeviceUseCase(DeviceTokenRepositoryPort devices) {
+        return new UnregisterDeviceUseCase(devices);
+    }
+
+    @Bean
+    NotifyCustomerUseCase notifyCustomerUseCase(CustomerRepositoryPort customers,
+                                                PreferencesRepositoryPort preferences,
+                                                DeviceTokenRepositoryPort devices, PushSenderPort pushSender) {
+        return new NotifyCustomerUseCase(customers, preferences, devices, pushSender, new NotificationTemplates());
     }
 }

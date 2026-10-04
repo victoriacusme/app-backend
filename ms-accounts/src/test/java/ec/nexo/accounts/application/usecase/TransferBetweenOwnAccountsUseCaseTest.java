@@ -3,6 +3,7 @@ package ec.nexo.accounts.application.usecase;
 import ec.nexo.accounts.application.port.out.AccountRepositoryPort;
 import ec.nexo.accounts.application.port.out.MovementRepositoryPort;
 import ec.nexo.accounts.application.port.out.NotificationPort;
+import ec.nexo.accounts.application.port.out.TransferNotification;
 import ec.nexo.accounts.application.port.out.TransferRepositoryPort;
 import ec.nexo.accounts.application.usecase.TransferBetweenOwnAccountsUseCase.TransferCommand;
 import ec.nexo.accounts.domain.exception.AccountNotActiveException;
@@ -93,7 +94,8 @@ class TransferBetweenOwnAccountsUseCaseTest {
         order.verify(accounts).updateBalance(source);
         order.verify(accounts).updateBalance(target);
         order.verify(movements).saveAll(savedMovements.capture());
-        order.verify(notifications).transferCompleted(transfer);
+        order.verify(notifications).transferCompleted(new TransferNotification(ana, transfer.id(),
+                new BigDecimal("30.50"), "USD", "****7834"));
 
         assertThat(savedMovements.getValue()).satisfiesExactly(
                 debit -> {

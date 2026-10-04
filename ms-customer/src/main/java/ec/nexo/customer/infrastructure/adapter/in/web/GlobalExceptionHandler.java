@@ -2,6 +2,7 @@ package ec.nexo.customer.infrastructure.adapter.in.web;
 
 import ec.nexo.customer.domain.exception.CustomerException;
 import ec.nexo.customer.domain.exception.CustomerNotFoundException;
+import ec.nexo.customer.domain.exception.InvalidNotificationException;
 import ec.nexo.customer.domain.exception.InvalidPreferenceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,7 @@ class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return switch (e) {
             case CustomerNotFoundException ex -> ProblemDetails.of(HttpStatus.NOT_FOUND, "customer-not-found", ex.getMessage());
             case InvalidPreferenceException ex -> ProblemDetails.of(HttpStatus.BAD_REQUEST, "invalid-preference", ex.getMessage());
+            case InvalidNotificationException ex -> ProblemDetails.of(HttpStatus.BAD_REQUEST, "invalid-notification", ex.getMessage());
             default -> ProblemDetails.of(HttpStatus.BAD_REQUEST, "customer-error", e.getMessage());
         };
     }

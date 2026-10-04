@@ -49,6 +49,12 @@ class ExperienceIT {
     @Autowired
     private DiscardCustomerUseCase discardCustomer;
     @Autowired
+    private RegisterDeviceUseCase registerDevice;
+    @Autowired
+    private UnregisterDeviceUseCase unregisterDevice;
+    @Autowired
+    private NotifyCustomerUseCase notifyCustomer;
+    @Autowired
     private CustomerRepositoryPort customers;
     @Autowired
     private JdbcTemplate jdbc;
@@ -169,6 +175,27 @@ class ExperienceIT {
         assertThat(home.segment()).isEqualTo(Segment.YOUNG);
         assertThat(home.components()).extracting(Experience.Component::type).doesNotContain("savings_goal");
         assertThat(types(ANA)).contains("savings_goal");
+    }
+
+    @Test
+    void notificaALosDispositivosDelClienteYUnTokenSeReasignaSiCambiaDeUsuario() {
+        var transfer = Map.of("transferId", "t-1", "amount", "10.00", "currency", "USD", "targetAccount", "****7834");
+        registerDevice.execute(ANA, "telefono-compartido", ec.nexo.customer.domain.model.DevicePlatform.ANDROID);
+        registerDevice.execute(ANA, "telefono-compartido", ec.nexo.customer.domain.model.DevicePlatform.ANDROID);
+
+        assertThat(notifyCustomer.execute(ANA, ec.nexo.customer.domain.model.NotificationType.TRANSFER_COMPLETED,
+                transfer).delivered()).isEqualTo(1);
+
+        // En el mismo teléfono inicia sesión carlos: el token pasa a ser suyo y ana deja de recibir avisos ahí.
+        registerDevice.execute(CARLOS, "telefono-compartido", ec.nexo.customer.domain.model.DevicePlatform.ANDROID);
+        assertThat(notifyCustomer.execute(ANA, ec.nexo.customer.domain.model.NotificationType.TRANSFER_COMPLETED,
+                transfer).skipped()).isEqualTo(NotifyCustomerUseCase.Skipped.NO_DEVICES);
+
+        // ana no puede desregistrar un teléfono que ya no es suyo.
+        unregisterDevice.execute(ANA, "telefono-compartido");
+        assertThat(notifyCustomer.execute(CARLOS, ec.nexo.customer.domain.model.NotificationType.TRANSFER_COMPLETED,
+                transfer).delivered()).isEqualTo(1);
+        unregisterDevice.execute(CARLOS, "telefono-compartido");
     }
 
     @Test

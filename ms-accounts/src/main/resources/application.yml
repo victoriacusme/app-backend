@@ -35,6 +35,11 @@ nexo:
     jwks-connect-timeout: 2s
     jwks-read-timeout: 3s
     internal-api-key: ${INTERNAL_API_KEY:dev-internal-key-change-me}
+  services:
+    # Notificaciones push: ms-customer conoce los dispositivos, el idioma y las preferencias del cliente.
+    customer-url: ${CUSTOMER_SERVICE_URL:http://localhost:8082}
+    connect-timeout: 2s
+    read-timeout: 3s
 
 logging:
   pattern:
