@@ -1,0 +1,5 @@
+[
+  { "name": "ms-auth",     "listen": "0.0.0.0:18081", "upstream": "ms-auth:8081",     "enabled": true },
+  { "name": "ms-customer", "listen": "0.0.0.0:18082", "upstream": "ms-customer:8082", "enabled": true },
+  { "name": "ms-accounts", "listen": "0.0.0.0:18083", "upstream": "ms-accounts:8083", "enabled": true }
+]
