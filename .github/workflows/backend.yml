@@ -1,0 +1,64 @@
+# CI del backend: cada push y cada PR compila los tres microservicios y ejecuta todos sus tests
+# (unitarios con Mockito e integración con Testcontainers; los runners de GitHub traen Docker).
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**"]
+  pull_request:
+    branches: [main, develop]
+
+# Un push nuevo en la misma rama cancela la ejecución anterior.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build y tests (mvn verify)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Compilar y ejecutar tests unitarios y de integración
+        run: mvn -B -ntp verify
+
+      - name: Publicar reportes de tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reportes-de-tests
+          path: |
+            ms-*/target/surefire-reports/
+            ms-*/target/failsafe-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  config:
+    name: Validar compose, gateway y scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: docker-compose.yml
+        run: docker compose config --quiet
+
+      - name: Configuración de Nginx
+        # "toxiproxy" se resuelve a localhost: nginx -t solo necesita que el upstream exista.
+        run: >
+          docker run --rm -v "$PWD/gateway:/etc/nginx/nexo:ro" --add-host toxiproxy:127.0.0.1
+          nginx:1.27-alpine nginx -t -c /etc/nginx/nexo/nginx.conf
+
+      - name: Sintaxis de los scripts de caos y demo
+        run: bash -n chaos/*.sh scripts/*.sh

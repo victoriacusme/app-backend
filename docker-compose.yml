@@ -1,0 +1,175 @@
+name: nexo
+
+# Credenciales solo para desarrollo local. Se pueden sobrescribir con un archivo .env (ver .env.example).
+x-db-env: &db-env
+  POSTGRES_USER: ${DB_USER:-nexo}
+  POSTGRES_PASSWORD: ${DB_PASSWORD:-nexo}
+
+x-db-healthcheck: &db-healthcheck
+  test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+
+x-ms-env: &ms-env
+  DB_USER: ${DB_USER:-nexo}
+  DB_PASSWORD: ${DB_PASSWORD:-nexo}
+  INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+  JAVA_OPTS: -XX:MaxRAMPercentage=75
+
+services:
+  # --- Bases de datos (una por microservicio) ---
+  auth-db:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: auth_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    healthcheck: *db-healthcheck
+
+  customer-db:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: customer_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - customer-db-data:/var/lib/postgresql/data
+    healthcheck: *db-healthcheck
+
+  accounts-db:
+    image: postgres:16-alpine
+    environment:
+      <<: *db-env
+      POSTGRES_DB: accounts_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - accounts-db-data:/var/lib/postgresql/data
+    healthcheck: *db-healthcheck
+
+  # --- Microservicios ---
+  ms-auth:
+    build: ./ms-auth
+    image: nexo/ms-auth:0.1.0
+    environment:
+      <<: *ms-env
+      DB_URL: jdbc:postgresql://auth-db:5432/auth_db
+      CUSTOMER_SERVICE_URL: http://ms-customer:8082
+      ACCOUNTS_SERVICE_URL: http://ms-accounts:8083
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-}
+      JWT_ENCRYPTION_KEY: ${JWT_ENCRYPTION_KEY:-}
+    ports:
+      - "8081:8081"
+    depends_on:
+      auth-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  ms-customer:
+    build: ./ms-customer
+    image: nexo/ms-customer:0.1.0
+    environment:
+      <<: *ms-env
+      DB_URL: jdbc:postgresql://customer-db:5432/customer_db
+      # Clave de cifrado de cédula y teléfono. Esta es SOLO de desarrollo; en otros entornos va en un gestor de secretos.
+      CUSTOMER_DATA_KEY: ${CUSTOMER_DATA_KEY:-E8224wTBNfSLRE51ql6zBlEBm2mleb5kcM2BqZHMYkM=}
+      JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
+      # Push real con Firebase: cuenta de servicio en ./secrets (ver .env.example). Vacío → push solo en el log.
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+    volumes:
+      - ./secrets:/run/secrets/nexo:ro
+    ports:
+      - "8082:8082"
+    depends_on:
+      customer-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  ms-accounts:
+    build: ./ms-accounts
+    image: nexo/ms-accounts:0.1.0
+    environment:
+      <<: *ms-env
+      DB_URL: jdbc:postgresql://accounts-db:5432/accounts_db
+      CUSTOMER_SERVICE_URL: http://ms-customer:8082
+      JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
+    ports:
+      - "8083:8083"
+    depends_on:
+      accounts-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  # --- Resiliencia: proxy entre el gateway y los micros para simular latencia y caídas (ver chaos/) ---
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./chaos/toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "8474:8474"   # API de control, la usan los scripts de chaos/
+    depends_on:
+      ms-auth:
+        condition: service_healthy
+      ms-customer:
+        condition: service_healthy
+      ms-accounts:
+        condition: service_healthy
+
+  # --- Gateway: única entrada para la app (http://localhost:8080; en el emulador Android, 10.0.2.2:8080) ---
+  gateway:
+    image: nginx:1.27-alpine
+    # Se monta la carpeta (no el archivo suelto) para que las ediciones se vean con un simple "nginx -s reload".
+    command: ["nginx", "-c", "/etc/nginx/nexo/nginx.conf", "-g", "daemon off;"]
+    volumes:
+      - ./gateway:/etc/nginx/nexo:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      toxiproxy:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # --- Túnel HTTPS (opcional): URL pública fija para que cualquier teléfono use el backend, en cualquier red ---
+  # Se activa con: docker compose --profile tunnel up -d
+  # Requiere NGROK_AUTHTOKEN y NGROK_DOMAIN (dominio estático gratuito de ngrok) en .env. Ver .env.example.
+  tunnel:
+    image: ngrok/ngrok:3
+    profiles: ["tunnel"]
+    command: ["http", "--url=${NGROK_DOMAIN:-}", "gateway:8080"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  auth-db-data:
+  customer-db-data:
+  accounts-db-data:

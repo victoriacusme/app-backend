@@ -1,0 +1,23 @@
+# --- General ---
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/*
+*.iml
+
+# --- Java / Maven ---
+target/
+*.class
+hs_err_pid*
+
+# --- Secretos / claves ---
+# Credenciales locales (p. ej. cuenta de servicio de Firebase). Nunca se versionan.
+secrets/
+*.pem
+*.p12
+*.jks
+# Cuenta de servicio de Firebase (FCM) y otros secretos locales
+secrets/
