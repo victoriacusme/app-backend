@@ -5,23 +5,22 @@
 Backend de **Nexo Bank** (banca personas) para la app móvil en Flutter. Son tres microservicios Spring Boot con
 arquitectura hexagonal y una base de datos por servicio, detrás de un gateway Nginx.
 
+```mermaid
+flowchart LR
+    app["📱 App Flutter"] -->|"HTTPS · JWT"| gw["Gateway Nginx :8080"]
+    gw --> tp["Toxiproxy"]
+    gw -->|"/external/fx"| fx["🌐 open.er-api.com"]
+    tp --> auth["ms-auth :8081<br/>login · JWT · onboarding"]
+    tp --> cust["ms-customer :8082<br/>perfil · SDUI · push"]
+    tp --> acc["ms-accounts :8083<br/>cuentas · transferencias"]
+    auth --> adb[("auth_db")]
+    cust --> cdb[("customer_db")]
+    acc --> accdb[("accounts_db")]
+    cust --> fcm["🔔 FCM"]
 ```
-                         App Flutter
-                              │  HTTPS · JWT · JWE (login) · Idempotency-Key · X-Correlation-Id
-                    ┌─────────▼──────────┐
-                    │  Gateway (Nginx)   │  :8080 · ruteo · rate limit · bloquea /internal y /actuator
-                    └─────────┬──────────┘
-                    ┌─────────▼──────────┐
-                    │     Toxiproxy      │  simula latencia y caídas (chaos/)
-                    └──┬───────┬───────┬─┘
-          ┌────────────▼┐ ┌────▼──────────┐ ┌▼─────────────┐      open.er-api.com
-          │   ms-auth   │ │  ms-customer  │ │ ms-accounts  │      (tipo de cambio,
-          │ login · JWT │ │ perfil · SDUI │ │ cuentas      │       vía /external/fx)
-          │ refresh     │ │ preferencias  │ │ movimientos  │
-          │ onboarding  │ │ push          │ │ transferencias│
-          └──────┬──────┘ └──────┬────────┘ └──────┬───────┘
-              auth_db       customer_db        accounts_db        (PostgreSQL 16)
-```
+
+Más diagramas (capas, modelo de datos, flujos de login, transferencia, onboarding, SDUI y resiliencia) en
+[`docs/architecture.md`](docs/architecture.md).
 
 | Servicio | Puerto | Responsabilidad |
 |---|---|---|
@@ -138,8 +137,11 @@ ms-customer, que arma el texto en el idioma del cliente y lo envía a sus dispos
 
 - **Sin credenciales de Firebase** (por defecto), la notificación se registra en el log:
   `docker compose logs -f ms-customer | grep "Push simulado"`.
-- **Para enviar por FCM**, monta la cuenta de servicio de Firebase (JSON) en el contenedor y define
-  `FCM_CREDENTIALS_FILE` con su ruta.
+- **Para enviar por FCM**: guarda la cuenta de servicio de Firebase (JSON) en `secrets/firebase-adminsdk.json`
+  (carpeta ignorada por git, montada en el contenedor), agrega a `.env`
+  `FCM_CREDENTIALS_FILE=/run/secrets/nexo/firebase-adminsdk.json` y ejecuta `docker compose up -d ms-customer`.
+  Al arrancar, el log dice `Notificaciones push vía Firebase Cloud Messaging`. La app necesita además su
+  `google-services.json` (ver el README de la app).
 
 ## Tests
 
@@ -188,20 +190,11 @@ Variables principales (ver `.env.example`):
 
 ## Documentación
 
+- [`docs/architecture.md`](docs/architecture.md): diagramas de componentes, capas, modelo de datos y flujos críticos.
+- [`docs/decisions.md`](docs/decisions.md): decisiones de arquitectura (ADR) con alternativas y trade-offs.
+- [`docs/risks-and-scaling.md`](docs/risks-and-scaling.md): riesgos, cómo escalar y despliegue en producción.
 - [`docs/security.md`](docs/security.md): autenticación, JWE, cifrado en reposo, servicio a servicio (mTLS), logs
   sin datos personales y gestión de secretos.
 - [`docs/monitoring.md`](docs/monitoring.md): monitoreo en producción, SLO, alertas y cómo detectar problemas
   operativos y de experiencia de usuario.
-
-## Solución de problemas
-
-- **`docker compose up` falla al descargar imágenes (timeout):** algunas redes bloquean el CDN de Docker Hub.
-  Descarga las imágenes desde el espejo de Google y vuelve a intentarlo:
-  ```bash
-  for img in postgres:16-alpine eclipse-temurin:21-jre-alpine maven:3.9-eclipse-temurin-21-alpine nginx:1.27-alpine; do
-    docker pull mirror.gcr.io/library/$img && docker tag mirror.gcr.io/library/$img $img
-  done
-  ```
-- **`docker compose ps` no muestra nada:** revisa `docker context ls`. Si Docker Desktop está activo, vuelve al
-  Docker del sistema con `docker context use default`.
-- **Las sesiones dejan de servir tras reiniciar ms-auth:** fija `JWT_SIGNING_KEY` y `JWT_ENCRYPTION_KEY` en `.env`.
+- [`docs/ai-usage.md`](docs/ai-usage.md): cómo se usó la IA en el desarrollo y cómo se verificó lo que produjo.

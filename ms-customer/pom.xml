@@ -77,6 +77,13 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- FirebaseOptions usa JacksonFactory; llegaba solo a través de Firestore/Storage (excluidos arriba).
+             Sin esto, ms-customer no arranca cuando se configura FCM_CREDENTIALS_FILE. -->
+        <dependency>
+            <groupId>com.google.http-client</groupId>
+            <artifactId>google-http-client-jackson2</artifactId>
+            <version>2.2.0</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

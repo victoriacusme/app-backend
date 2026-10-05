@@ -85,6 +85,10 @@ services:
       # Clave de cifrado de cédula y teléfono. Esta es SOLO de desarrollo; en otros entornos va en un gestor de secretos.
       CUSTOMER_DATA_KEY: ${CUSTOMER_DATA_KEY:-E8224wTBNfSLRE51ql6zBlEBm2mleb5kcM2BqZHMYkM=}
       JWT_JWKS_URI: http://ms-auth:8081/.well-known/jwks.json
+      # Push real con Firebase: cuenta de servicio en ./secrets (ver .env.example). Vacío → push solo en el log.
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+    volumes:
+      - ./secrets:/run/secrets/nexo:ro
     ports:
       - "8082:8082"
     depends_on:
@@ -150,6 +154,20 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
+
+  # --- Túnel HTTPS (opcional): URL pública fija para que cualquier teléfono use el backend, en cualquier red ---
+  # Se activa con: docker compose --profile tunnel up -d
+  # Requiere NGROK_AUTHTOKEN y NGROK_DOMAIN (dominio estático gratuito de ngrok) en .env. Ver .env.example.
+  tunnel:
+    image: ngrok/ngrok:3
+    profiles: ["tunnel"]
+    command: ["http", "--url=${NGROK_DOMAIN:-}", "gateway:8080"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   auth-db-data:
