@@ -1,202 +1,168 @@
-# Monitoreo en producción
+# Cómo monitorearía la aplicación en producción
 
-Cómo se monitorearía Nexo Bank en producción y cómo se detectarían los problemas **operativos** (algo está caído,
-lento o saturado) y los de **experiencia de usuario** (todo "funciona", pero el cliente no logra lo que quiere).
+La pregunta no es solo "¿está funcionando el servidor?", sino **"¿los clientes pueden hacer lo que vinieron a
+hacer?"**. Un servidor puede responder sin errores y aun así el cliente estar frustrado. Por eso miro dos tipos de
+problemas:
 
-## Enfoque
+- **Operativos:** algo está caído, lento o saturado.
+- **De experiencia:** todo "funciona", pero el cliente no logra iniciar sesión, transferir o registrarse.
 
-El monitoreo tiene que responder, en este orden, cuatro preguntas:
+## Las 4 preguntas que quiero poder responder
 
-1. **¿Los clientes pueden hacer lo importante?** Iniciar sesión, ver sus saldos y transferir. Es lo que se alerta.
-2. **¿Dónde está el problema?** En qué servicio, endpoint o dependencia. Lo responden los dashboards.
-3. **¿Por qué pasó?** Lo responden los logs y las trazas, unidos por el correlation-id.
-4. **¿A quién afecta?** Segmento, versión de la app, plataforma o tipo de red. Lo responden los datos del cliente.
+1. **¿Los clientes pueden hacer lo importante?** Iniciar sesión, ver su saldo y transferir. → Por esto me avisan
+   las alertas.
+2. **¿Dónde está el problema?** En qué servicio, en qué pantalla, en qué dependencia. → Lo veo en los tableros.
+3. **¿Por qué pasó?** → Lo encuentro en los registros, siguiendo un identificador.
+4. **¿A quién afecta?** A qué versión de la app, sistema operativo o tipo de cliente. → Lo veo con los datos de la
+   app.
 
-Se alerta por **síntomas** que siente el usuario (errores, latencia, operaciones que no se completan) y no por causas
-(CPU al 80 %). Las causas se usan para diagnosticar, no para despertar a nadie.
+**Regla que sigo:** las alertas avisan de lo que **siente el cliente** (errores, lentitud, operaciones que no se
+completan), no de causas técnicas como "el CPU está al 80 %". Las causas sirven para investigar, no para despertar
+a alguien a las 3 de la mañana.
 
-## Qué ya está preparado en el backend
+## Lo que ya dejé preparado
 
-| Señal | Estado | Detalle |
-|---|---|---|
-| Métricas de cada servicio | ✅ | Actuator + Micrometer en `/actuator/prometheus`: peticiones HTTP por `uri`, `status` y `outcome`, pool de conexiones (`hikaricp_*`), JVM, GC y CPU |
-| Health checks | ✅ | `/actuator/health` en los tres servicios y `/health` en el gateway; Docker los usa para el estado `healthy` |
-| Correlation-id | ✅ | `X-Correlation-Id` viaja app → gateway → servicios → llamadas internas; aparece en cada línea de log y en el campo `correlationId` de los errores |
-| Errores clasificables | ✅ | Todo error es `ProblemDetail` con un `code` estable (`insufficient-funds`, `service-unavailable`, `user-locked`...) |
-| Log de acceso del gateway | ✅ | Cada petición con estado, tiempo total, tiempo del servicio (`upstream_response_time`) y correlation-id |
-| Logs sin datos personales | ✅ | Ver `docs/security.md`; se pueden enviar a una plataforma externa sin riesgo |
-| Histogramas de latencia | ⬜ | Necesarios para p95/p99. Una línea: `management.metrics.distribution.percentiles-histogram.http.server.requests=true` |
-| Métricas de negocio | ⬜ | Contadores de transferencias, logins, onboarding y push (ver más abajo) |
-| Trazas distribuidas | ⬜ | OpenTelemetry (agente Java), sin cambios de código |
-
-## Arquitectura de observabilidad propuesta
-
-```
- App Flutter ──► Crashlytics / Sentry (crashes, ANR, rendimiento, errores de red por pantalla)
-     │
-     ▼
- Gateway ─────► log de acceso (JSON) ─────────────┐
-     │                                            ▼
- ms-auth · ms-customer · ms-accounts ──► logs ──► Loki / Elasticsearch / CloudWatch Logs
-     │   └──── /actuator/prometheus ──► Prometheus (o Datadog / CloudWatch / Grafana Cloud)
-     │   └──── agente OpenTelemetry ──► Tempo / Jaeger (trazas)
-     ▼
- PostgreSQL ──► métricas de la BD gestionada (conexiones, locks, réplica, disco)
-                                                  │
-                     Grafana (dashboards) ◄───────┘──► Alertmanager ──► Slack / PagerDuty
- Sondas sintéticas ──► (login, cuentas, transferencia de prueba cada minuto)
-```
-
-Con un proveedor gestionado (Datadog, New Relic, Grafana Cloud) la idea es la misma: lo importante son las
-señales y las alertas, no la herramienta.
-
-## Objetivos de servicio (SLO)
-
-Los SLO definen qué es "funcionar bien" desde el punto de vista del cliente. Son la base de las alertas.
-
-| Recorrido | Indicador (SLI) | Objetivo |
-|---|---|---|
-| Iniciar sesión | Logins que no terminan en 5xx | 99,9 % mensual |
-| Ver cuentas y movimientos | Peticiones respondidas en < 500 ms | 95 % |
-| Transferir | Transferencias sin error técnico (5xx o timeout) | 99,9 % |
-| Transferir | Tiempo de respuesta | p95 < 1 s |
-| Home personalizado | `/experience/home` sin 5xx | 99,5 % (la app tiene un layout de respaldo) |
-
-Un 99,9 % mensual deja unos **43 minutos de presupuesto de error**. Las alertas de SLO se disparan cuando ese
-presupuesto se consume demasiado rápido (*burn rate*): por ejemplo, el 2 % del presupuesto mensual en una hora.
-
-## Detectar problemas operativos
-
-Para cada servicio se siguen las señales **RED** (peticiones, errores y duración) y, para sus dependencias, la
-**saturación**.
-
-### Servicios
-
-```promql
-# Tasa de errores 5xx por servicio
-sum by (job) (rate(http_server_requests_seconds_count{outcome="SERVER_ERROR"}[5m]))
-  / sum by (job) (rate(http_server_requests_seconds_count[5m]))
-
-# Latencia p95 por endpoint (requiere activar los histogramas)
-histogram_quantile(0.95, sum by (le, job, uri) (rate(http_server_requests_seconds_bucket[5m])))
-
-# Tráfico: una caída brusca también es un síntoma (la app no logra llegar al backend)
-sum by (job) (rate(http_server_requests_seconds_count[5m]))
-```
-
-Las métricas llevan el `uri` como plantilla (`/accounts/{accountId}`), así que no explotan en cardinalidad.
-
-### Dependencias y saturación
-
-| Qué | Métrica o señal | Qué indica |
-|---|---|---|
-| Pool de conexiones a la BD | `hikaricp_connections_pending > 0` sostenido, `hikaricp_connections_timeout_total` creciendo | BD lenta, locks o pool chico. Con el timeout de 3 s configurado, el cliente ve 5xx rápido en vez de quedarse colgado |
-| Locks de transferencias | Duración de `POST /transfers/own`; en la BD, `pg_locks` y las consultas lentas | Contención sobre una misma cuenta |
-| JWKS de ms-auth | Errores 401 masivos en accounts o customer tras un despliegue de ms-auth | Rotación de claves mal hecha (en caché se tolera una caída breve) |
-| Servicio externo de tipo de cambio | Tasa de 5xx/504 en `/external/fx` (log del gateway) | Proveedor caído; la app oculta solo ese bloque |
-| Notificaciones push | Logs `No se pudo notificar` (ms-accounts) y entregas fallidas de FCM | Avisos que no llegan; la transferencia igual se completa |
-| JVM y contenedores | Memoria, pausas de GC, reinicios del contenedor, CPU | Causas de lentitud o caídas |
-| Gateway | 502/503/504 y 429 por ruta; `upstream_response_time` frente a `request_time` | Si la demora está en el servicio o en la red |
-
-### Sondas sintéticas
-
-Un proceso externo ejecuta cada minuto, con un usuario de prueba, el recorrido crítico: **login → cuentas → home →
-transferencia de $0,01 entre dos cuentas propias de prueba** (con `Idempotency-Key`). Detecta lo que las métricas
-internas no ven, como un DNS mal configurado, un certificado vencido o el gateway caído. Además mide la latencia
-desde fuera de la plataforma.
-
-## Detectar problemas de experiencia de usuario
-
-Un backend sin errores 5xx no garantiza una buena experiencia. Estas señales detectan cuando el cliente
-**no logra su objetivo**, aunque técnicamente todo responda.
-
-### Métricas de negocio (embudos)
-
-Se agregan con contadores de Micrometer, uno por punto de decisión (unas pocas líneas por caso de uso):
-
-| Métrica | Etiquetas | Qué revela |
-|---|---|---|
-| `nexo_logins_total` | `result`: ok, invalid_credentials, locked | Un pico de `locked` indica un ataque o un cambio en la app que rompe el login |
-| `nexo_onboarding_total` | `step`, `result` | Dónde se cae el registro; `onboarding-unavailable` indica un servicio interno caído |
-| `nexo_transfers_total` | `result`: completed, insufficient_funds, not_owned, replayed, conflict | El éxito real de las transferencias |
-| `nexo_push_total` | `result`: delivered, invalid_token, failed, skipped | Si los avisos llegan |
-
-**Señales clave:**
-- **Reintentos (`replayed`):** cada respuesta con `Idempotent-Replayed: true` significa que la app **no recibió** la
-  respuesta original (timeout o corte de red) y tuvo que reintentar. Que crezcan es un síntoma directo de mala
-  experiencia, aunque el backend nunca haya fallado.
-- **`insufficient_funds` inusualmente alto:** la app podría estar mostrando un saldo desactualizado (caché vieja).
-- **`conflict` (409, Idempotency-Key reutilizada):** casi siempre es un bug del cliente al generar las claves.
-- **Tasa de conversión del onboarding** por paso y por versión de la app.
-
-### Desde la app
-
-La app es la única que ve lo que vive el cliente, por eso se instrumenta (Crashlytics o Sentry):
-
-| Señal | Para qué |
+| Qué | Para qué sirve |
 |---|---|
-| Usuarios sin crashes (*crash-free users*) y ANR por versión | Detectar un release malo y frenar su despliegue gradual |
-| Tiempo de arranque y de carga de cada pantalla | Lentitud percibida, aunque el backend responda rápido |
-| Latencia y errores de red vistos desde el dispositivo, por tipo de red | Problemas en redes móviles que el servidor no ve |
-| Veces que se muestra "Sin conexión", "Datos de hace X min" o se usa el layout de respaldo del home | Cuánto tiempo los clientes ven datos viejos o degradados |
-| Aperturas del circuit breaker y reintentos | Servicios inestables desde la óptica del cliente |
-| Componentes SDUI desconocidos o con error de render | Una experiencia publicada en BD que la app no sabe dibujar |
-| Errores por `code` y por pantalla | Qué errores de negocio ven los clientes y dónde |
-| Embudos: login → home → transferencia → comprobante; pasos del onboarding | Abandono y fricción |
+| **Métricas en cada servicio** (`/actuator/prometheus`) | Cuántas peticiones hay, cuántas fallan y cuánto tardan, por cada ruta. También el estado de la conexión a la base de datos y de la memoria |
+| **Chequeo de salud** (`/actuator/health`) | Saber si cada servicio está vivo |
+| **Identificador de seguimiento** (`X-Correlation-Id`) | Viaja por todos los servicios y aparece en cada registro y en cada error. Con él sigo el recorrido completo de una petición |
+| **Errores con código fijo** (`insufficient-funds`, `service-unavailable`…) | Contar qué errores ven los clientes |
+| **Registro del gateway** | Cada petición con su resultado y su tiempo, separando el tiempo del servicio del de la red |
+| **Registros sin datos personales** | Se pueden enviar a una herramienta externa sin riesgo |
 
-Todos estos eventos llevan la versión de la app, la plataforma y el segmento, **nunca datos personales**.
+## Las herramientas que usaría
+
+```
+ 📱 App ──────► Crashlytics o Sentry (cierres inesperados, lentitud, errores por pantalla)
+ 🌐 Gateway y servicios ──► registros ──► Loki / Elasticsearch / CloudWatch
+ 📊 Servicios ──► métricas ──► Prometheus + Grafana (o Datadog)
+ 🔍 Servicios ──► recorrido de cada petición ──► OpenTelemetry + Jaeger
+ 🤖 Prueba automática cada minuto ──► login → saldo → transferencia de $0,01
+ 🚨 Alertas ──► Slack (lo leve) / guardia de turno (lo grave)
+```
+
+Lo importante no es la marca de la herramienta, sino **qué miro y cuándo me aviso**.
+
+## Mis metas de calidad (SLO)
+
+Estas metas definen qué significa "funcionar bien" para el cliente:
+
+| Acción del cliente | Meta |
+|---|---|
+| Iniciar sesión | Funciona el 99,9 % de las veces |
+| Ver saldo y movimientos | El 95 % responde en menos de medio segundo |
+| Transferir | Funciona el 99,9 % de las veces y el 95 % responde en menos de 1 segundo |
+| Ver el home | Funciona el 99,5 % de las veces (la app tiene un home de respaldo) |
+
+Un 99,9 % al mes permite unos **43 minutos de fallas al mes**. Si ese margen se está gastando demasiado rápido, me
+avisa una alerta.
+
+## Cómo detecto problemas operativos
+
+Para cada servicio miro tres cosas: **cuántas peticiones llegan, cuántas fallan y cuánto tardan.**
+
+| Señal | Qué me indica |
+|---|---|
+| Suben los errores 5xx | Algo se rompió: un despliegue reciente, una base de datos con problemas… |
+| Sube el tiempo de respuesta | Algo se está saturando |
+| **Bajan** de golpe las peticiones | Puede ser grave: los clientes no logran llegar al backend |
+| Peticiones esperando conexión a la base de datos | La base está lenta o hay operaciones esperando su turno |
+| Muchos errores "sesión inválida" tras un despliegue | Se cambiaron mal las claves de firma |
+| Errores en `/external/fx` | Se cayó el proveedor de tipo de cambio (la app oculta solo ese bloque) |
+| Avisos que no se pudieron enviar | Las notificaciones no están llegando |
+| Servicios que se reinician solos | Falta de memoria o errores al arrancar |
+
+Además, una **prueba automática** recorre cada minuto el camino crítico con un usuario de prueba: login → saldo →
+transferencia de $0,01 entre dos cuentas de prueba. Así detecto lo que las métricas internas no ven, como un
+certificado vencido o la entrada principal caída.
+
+## Cómo detecto problemas de experiencia de usuario
+
+### Contando lo que logran (y lo que no) los clientes
+
+Agregaría contadores en cada punto importante:
+
+| Qué cuento | Qué me revela |
+|---|---|
+| Logins correctos, fallidos y bloqueados | Un pico de bloqueos indica un ataque o una versión de la app con un error en el login |
+| Registros: en qué paso se abandonan | Dónde está la fricción del registro |
+| Transferencias completadas, rechazadas por saldo, rechazadas por cuenta ajena | El éxito real de la función más importante |
+| **Veces que el cliente tocó "Verificar estado"** | Ver abajo 👇 |
+| Notificaciones entregadas o fallidas | Si los avisos llegan |
+
+**La señal más reveladora: "Verificar estado".** Cuando la app no recibe la respuesta de una transferencia (por un
+corte de señal o por lentitud), **no reintenta sola**: le muestra al cliente "No pudimos confirmar el resultado" y un
+botón "Verificar estado", que reenvía la misma solicitud con el mismo `Idempotency-Key`. Si ese botón se usa cada vez
+más, los clientes están viviendo una mala experiencia, **aunque el backend nunca haya fallado**. Lo detecto porque
+esas respuestas llevan la marca `Idempotent-Replayed: true`.
+
+Otras pistas:
+- **Muchos rechazos por saldo insuficiente:** la app podría estar mostrando un saldo desactualizado.
+- **Conflictos de "número de recibo"** (error 409): casi siempre es un error de la app.
+
+### Desde la propia app
+
+La app es la única que ve lo que vive el cliente. Desde ahí mediría:
+
+| Qué | Para qué |
+|---|---|
+| Cierres inesperados de la app, por versión | Detener la publicación de una versión defectuosa |
+| Cuánto tarda en abrir y en cargar cada pantalla | Lentitud percibida, aunque el servidor responda rápido |
+| Errores de red, por tipo de conexión (wifi o datos móviles) | Problemas que el servidor nunca ve |
+| Cuántas veces se muestra "Sin conexión" o "Datos de hace X minutos" | Cuánto tiempo los clientes ven información vieja |
+| Bloques del home que no se pudieron mostrar | Una campaña mal configurada |
+
+Siempre **sin datos personales**: solo versión, sistema operativo y tipo de cliente.
 
 ### Soporte al cliente
 
-Las pantallas de error muestran el `correlationId`. Si un cliente llama, soporte busca ese id y ve el recorrido
-completo (gateway → servicio → llamadas internas) **sin pedirle datos personales**. Con trazas distribuidas, el
-mismo id lleva a la traza con el tiempo de cada tramo.
+Las pantallas de error muestran el identificador de seguimiento. Si un cliente llama, soporte lo busca y ve todo el
+recorrido de esa petición, **sin pedirle datos personales**.
 
 ## Alertas
 
-| Alerta | Condición | Severidad | Primera acción |
+| Alerta | Cuándo | Gravedad | Qué hago primero |
 |---|---|---|---|
-| Errores en un servicio | 5xx > 2 % durante 5 min | Crítica | Dashboard del servicio → logs por `code` y correlation-id → ¿hubo un despliegue? |
-| Latencia | p95 > 1 s durante 10 min (p95 > 1,5 s en transferencias) | Alta | Separar `upstream_response_time` de la red; revisar el pool de BD y los locks |
-| SLO de transferencias | Burn rate rápido del presupuesto de error | Crítica | Igual que errores; considerar rollback |
-| Sonda sintética | 2 fallos seguidos del recorrido crítico | Crítica | Verificar desde fuera: DNS, certificado, gateway |
-| Servicio caído | Health check fallando o reinicios repetidos del contenedor | Crítica | Logs del arranque (migraciones de Flyway, claves faltantes) |
-| Pool de BD saturado | `hikaricp_connections_pending > 0` durante 5 min | Alta | Consultas lentas y locks en PostgreSQL |
-| Bloqueos de usuarios | `user-locked` x5 sobre la línea base | Media | ¿Ataque de fuerza bruta (por IP) o bug del login en la app? |
-| Reintentos idempotentes | `replayed` > 5 % de las transferencias | Media | Timeouts entre la app y el gateway; latencia en redes móviles |
-| Crash rate de la app | Usuarios sin crashes < 99,5 % en la última versión | Alta | Detener el despliegue gradual de esa versión |
-| Servicio externo | Errores en `/external/fx` > 50 % durante 15 min | Baja | Avisar; la app degrada sola (oculta el bloque) |
-| Push | Entregas fallidas > 10 % durante 30 min | Baja | Credenciales de FCM o cuota |
+| Errores en un servicio | Más del 2 % de las peticiones fallan durante 5 min | 🔴 Crítica | Revisar el tablero del servicio y si hubo un despliegue reciente |
+| Lentitud | El 95 % tarda más de 1 s durante 10 min | 🟠 Alta | Ver si la demora está en el servicio o en la base de datos |
+| La prueba automática falla | 2 veces seguidas | 🔴 Crítica | Verificar desde afuera: dominio, certificado, entrada |
+| Un servicio no responde | Su chequeo de salud falla | 🔴 Crítica | Revisar los registros de arranque |
+| Base de datos saturada | Peticiones esperando conexión durante 5 min | 🟠 Alta | Buscar consultas lentas u operaciones trabadas |
+| Muchos usuarios bloqueados | 5 veces más de lo normal | 🟡 Media | ¿Ataque o error en el login de la app? |
+| "Verificar estado" frecuente | Más del 5 % de las transferencias | 🟡 Media | Revisar la lentitud entre la app y el servidor |
+| La app se cierra sola | Menos del 99,5 % de usuarios sin cierres en la última versión | 🟠 Alta | Detener la publicación de esa versión |
+| Falla el tipo de cambio | Más de la mitad de las consultas durante 15 min | 🟢 Baja | Avisar al proveedor; la app ya se adapta sola |
 
-Cada alerta enlaza a un **runbook** corto (qué mirar y qué hacer) y a su dashboard. Las de severidad baja van a un
-canal de Slack, no a la guardia.
+Las alertas leves van a un canal de Slack. Solo las críticas despiertan a la persona de guardia.
 
-## Dashboards
+## Tableros
 
-1. **Experiencia y negocio:** SLO y presupuesto de error, logins, transferencias por resultado, embudo del
-   onboarding, reintentos, crash-free users y uso de modos degradados en la app.
-2. **Servicios (RED):** por servicio y endpoint, tráfico, errores por `code` y latencia p50/p95/p99, con las marcas de
-   cada despliegue.
-3. **Dependencias e infraestructura:** pools de BD, PostgreSQL (conexiones, locks, consultas lentas), JVM, contenedores,
-   gateway (5xx, 429, latencia upstream), servicio externo y FCM.
+1. **Experiencia del cliente:** metas de calidad, logins, transferencias, registro paso a paso, uso de "Verificar
+   estado" y cierres de la app.
+2. **Servicios:** peticiones, errores y tiempos de cada ruta, marcando cada despliegue.
+3. **Infraestructura:** bases de datos, memoria, gateway y servicios externos.
 
-## Un incidente, de punta a punta
+## Un ejemplo de punta a punta
 
-1. **Alerta:** "5xx en ms-accounts > 2 %".
-2. **Dashboard:** solo falla `POST /transfers/own`; la latencia subió y el pool de BD tiene conexiones en espera.
-3. **Logs:** filtrando `code=internal-error` aparece un timeout de consulta. Se toma un `correlationId`.
-4. **Traza:** ese id muestra que el tiempo se va en el `SELECT ... FOR UPDATE`. Hay contención de locks.
-5. **Causa:** un job batch está bloqueando cuentas. Se corrige y el dashboard confirma la recuperación.
-6. **Mientras tanto, la experiencia:** la app mostró "No pudimos completar la transferencia". Gracias a la
-   idempotencia, los reintentos no duplicaron dinero.
+1. **Me llega la alerta:** "más del 2 % de errores en `ms-accounts`".
+2. **Miro el tablero:** solo falla "transferir", tarda más de lo normal y hay peticiones esperando a la base de
+   datos.
+3. **Busco en los registros** los errores recientes y tomo un identificador de seguimiento.
+4. **Sigo ese identificador** y veo que el tiempo se pierde esperando que se libere una cuenta.
+5. **Encuentro la causa:** un proceso nocturno estaba reteniendo cuentas. Lo corrijo y el tablero muestra la
+   recuperación.
+6. **Mientras tanto, el cliente:** vio "No pudimos confirmar el resultado", sin que la app reintentara por su
+   cuenta. Al tocar "Verificar estado", si la transferencia ya se había hecho, recibió la original. **Nunca se le
+   cobró dos veces.**
 
-## Qué falta para tenerlo funcionando
+## Lo que falta para tenerlo funcionando
 
 | Tarea | Esfuerzo |
 |---|---|
-| Activar histogramas de latencia (`percentiles-histogram`) | Una línea de configuración por servicio |
-| Contadores de negocio (logins, onboarding, transferencias, push) | Pocas líneas por caso de uso |
-| Logs en JSON (gateway y servicios) para indexarlos | Configuración de Logback y de Nginx |
-| Agente de OpenTelemetry para trazas | Variable de entorno en cada contenedor |
-| Prometheus y Grafana con los dashboards y las alertas de este documento | Fase 8 del plan |
-| Instrumentación de la app (Crashlytics o Sentry, eventos de embudo y modos degradados) | Lado del front |
+| Medir los tiempos en percentiles (para la meta del 95 %) | Una línea de configuración por servicio |
+| Contadores de logins, registros, transferencias y notificaciones | Pocas líneas por caso de uso |
+| Registros en formato JSON | Configuración de los servicios y del gateway |
+| Seguimiento de cada petición entre servicios (OpenTelemetry) | Una variable de entorno por servicio |
+| Prometheus y Grafana con estos tableros y alertas | Fase 8 del plan de monitoreo, cuando se realice |
+| Mediciones dentro de la app | Lado del front |

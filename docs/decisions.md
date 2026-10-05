@@ -1,352 +1,263 @@
-# Decisiones de arquitectura (ADR)
+# Decisiones que tomé y por qué
 
-Cada decisión sigue el mismo formato: **contexto**, **decisión**, **alternativas** que se evaluaron y
-**consecuencias** (lo que se gana y lo que se paga).
+Aquí explico las decisiones técnicas más importantes del backend. Para cada una cuento **qué decidí**, **por qué**,
+**qué otras opciones consideré** y **qué gané y qué pagué** con esa elección. Ninguna decisión es gratis: todas
+tienen un costo, y prefiero dejarlo escrito.
 
-| # | Decisión | Estado |
-|---|---|---|
-| 1 | [Arquitectura hexagonal en cada microservicio](#adr-1-arquitectura-hexagonal-en-cada-microservicio) | Aceptada |
-| 2 | [Tres microservicios con una base de datos cada uno](#adr-2-tres-microservicios-con-una-base-de-datos-cada-uno) | Aceptada |
-| 3 | [JWT RS256 validado con JWKS](#adr-3-jwt-rs256-validado-con-jwks) | Aceptada |
-| 4 | [Refresh token opaco, rotativo y con detección de reutilización](#adr-4-refresh-token-opaco-rotativo-y-con-detección-de-reutilización) | Aceptada |
-| 5 | [Login cifrado con JWE](#adr-5-login-cifrado-con-jwe) | Aceptada |
-| 6 | [Transferencias dentro de ms-accounts, en una sola transacción](#adr-6-transferencias-dentro-de-ms-accounts-en-una-sola-transacción) | Aceptada |
-| 7 | [Idempotencia con `Idempotency-Key` y bloqueo pesimista ordenado](#adr-7-idempotencia-con-idempotency-key-y-bloqueo-pesimista-ordenado) | Aceptada |
-| 8 | [Paginación de movimientos por cursor](#adr-8-paginación-de-movimientos-por-cursor) | Aceptada |
-| 9 | [Experiencia dinámica (SDUI) guardada en base de datos](#adr-9-experiencia-dinámica-sdui-guardada-en-base-de-datos) | Aceptada |
-| 10 | [Nginx como gateway](#adr-10-nginx-como-gateway) | Aceptada |
-| 11 | [Onboarding síncrono con compensación](#adr-11-onboarding-síncrono-con-compensación) | Aceptada |
-| 12 | [Cifrado en reposo en la aplicación (AES-256-GCM)](#adr-12-cifrado-en-reposo-en-la-aplicación-aes-256-gcm) | Aceptada |
-| 13 | [Notificaciones: ms-customer es el dueño y el aviso es asíncrono tras el commit](#adr-13-notificaciones-ms-customer-es-el-dueño-y-el-aviso-es-asíncrono-tras-el-commit) | Aceptada |
-| 14 | [Toxiproxy para demostrar la resiliencia](#adr-14-toxiproxy-para-demostrar-la-resiliencia) | Aceptada |
-| 15 | [Contrato de API: montos como texto y errores `ProblemDetail`](#adr-15-contrato-de-api-montos-como-texto-y-errores-problemdetail) | Aceptada |
+| # | Decisión |
+|---|---|
+| 1 | [Separar cada servicio en capas (arquitectura hexagonal)](#1-separar-cada-servicio-en-capas-arquitectura-hexagonal) |
+| 2 | [Tres servicios, cada uno con su propia base de datos](#2-tres-servicios-cada-uno-con-su-propia-base-de-datos) |
+| 3 | [Sesiones con tokens firmados (JWT RS256)](#3-sesiones-con-tokens-firmados-jwt-rs256) |
+| 4 | [Un token de renovación que cambia en cada uso](#4-un-token-de-renovación-que-cambia-en-cada-uso) |
+| 5 | [El login viaja cifrado (JWE)](#5-el-login-viaja-cifrado-jwe) |
+| 6 | [Las transferencias se hacen en un solo paso](#6-las-transferencias-se-hacen-en-un-solo-paso) |
+| 7 | [Una transferencia nunca se ejecuta dos veces](#7-una-transferencia-nunca-se-ejecuta-dos-veces) |
+| 8 | [Los movimientos se cargan por "marcador" y no por número de página](#8-los-movimientos-se-cargan-por-marcador-y-no-por-número-de-página) |
+| 9 | [El home se arma desde la base de datos (SDUI)](#9-el-home-se-arma-desde-la-base-de-datos-sdui) |
+| 10 | [Una sola puerta de entrada: Nginx](#10-una-sola-puerta-de-entrada-nginx) |
+| 11 | [El registro deshace lo que alcanzó a crear si algo falla](#11-el-registro-deshace-lo-que-alcanzó-a-crear-si-algo-falla) |
+| 12 | [Cifro la cédula y el teléfono antes de guardarlos](#12-cifro-la-cédula-y-el-teléfono-antes-de-guardarlos) |
+| 13 | [Las notificaciones salen después de confirmar la transferencia](#13-las-notificaciones-salen-después-de-confirmar-la-transferencia) |
+| 14 | [Un simulador de fallas para demostrar la resiliencia](#14-un-simulador-de-fallas-para-demostrar-la-resiliencia) |
+| 15 | [Montos como texto y errores con un código claro](#15-montos-como-texto-y-errores-con-un-código-claro) |
 
 ---
 
-## ADR-1: Arquitectura hexagonal en cada microservicio
+## 1. Separar cada servicio en capas (arquitectura hexagonal)
 
-**Contexto.** Las reglas de negocio de un banco (bloqueo por intentos, saldo, propiedad de las cuentas,
-idempotencia) deben poder probarse sin base de datos ni HTTP, y sobrevivir a cambios de tecnología.
+**Qué decidí.** Cada servicio tiene tres partes:
+- **Dominio:** las reglas del banco ("no se puede gastar más del saldo", "al quinto intento fallido se bloquea").
+- **Aplicación:** los casos de uso ("transferir", "iniciar sesión").
+- **Infraestructura:** lo técnico (base de datos, HTTP, notificaciones).
 
-**Decisión.** Cada servicio tiene tres capas:
-- `domain`: modelo y reglas, sin dependencias de Spring.
-- `application`: casos de uso y puertos de salida.
-- `infrastructure`: adaptadores web, JPA, HTTP, push y configuración.
+Las reglas no dependen de ninguna tecnología.
 
-Los casos de uso se ensamblan en `UseCaseConfig` y no llevan anotaciones de componente. La única concesión es
-`@Transactional` en los casos de uso.
+**Por qué.** Las reglas de un banco son lo más importante y lo que más hay que probar. Así las pruebo en
+milisegundos, sin levantar una base de datos.
 
-**Alternativas.**
-- *Capas clásicas (controller → service → repository):* menos archivos, pero la lógica termina acoplada a JPA y a
-  Spring.
-- *Clean architecture estricta:* sin anotaciones de Spring en `application`; la transacción se maneja con un
-  decorador. Es más pura, pero tiene más código ceremonial.
+**Otras opciones.** Las capas clásicas (controlador → servicio → repositorio) son más simples, pero las reglas
+terminan mezcladas con el código de la base de datos.
 
-**Consecuencias.**
-- ✅ Los casos de uso se prueban con Mockito en milisegundos.
-- ✅ Los adaptadores se prueban aparte, contra PostgreSQL real.
-- ✅ Cambiar un adaptador (por ejemplo, de push simulado a FCM) no toca el dominio.
-- ❌ Más clases (entidad JPA, modelo de dominio y mapeos) y algo de código repetido entre servicios.
+**Gano:** pruebas rápidas y la posibilidad de cambiar una pieza técnica sin tocar las reglas. Por ejemplo, cambiar
+las notificaciones simuladas por Firebase no tocó el dominio.
+**Pago:** más archivos y algo de código repetido entre servicios.
 
-## ADR-2: Tres microservicios con una base de datos cada uno
+## 2. Tres servicios, cada uno con su propia base de datos
 
-**Contexto.** La prueba pide microservicios. Los dominios son claros: identidad, cliente y cuentas.
-
-**Decisión.**
-- `ms-auth`: credenciales y sesiones.
-- `ms-customer`: perfil, preferencias, experiencia y notificaciones.
+**Qué decidí.**
+- `ms-auth`: usuarios y sesiones.
+- `ms-customer`: perfil, preferencias, home y notificaciones.
 - `ms-accounts`: cuentas, movimientos y transferencias.
 
-Cada uno tiene **su propia base de datos PostgreSQL** y sus migraciones Flyway. Se relacionan solo por el
-`customerId`, que viaja como `sub` en el JWT.
+Ninguno lee la base de datos de otro. Se relacionan solo por el identificador del cliente, que viaja en el token.
 
-**Alternativas.**
-- *Monolito modular:* más simple de operar y con transacciones locales entre módulos. Era una opción razonable para
-  este tamaño, pero no cumplía el requisito.
-- *Base de datos compartida:* facilita los joins, pero acopla los servicios por el esquema y anula su autonomía de
-  despliegue.
+**Por qué.** La prueba pide microservicios, y estos tres temas son naturalmente independientes.
 
-**Consecuencias.**
-- ✅ Cada servicio escala, se despliega y falla de forma independiente: si se cae ms-customer, las cuentas se
-  siguen viendo.
-- ❌ No hay transacciones entre servicios: el onboarding necesita compensación (ADR-11).
-- ❌ Más infraestructura que operar: tres bases de datos.
+**Otras opciones.**
+- *Una sola aplicación bien organizada (monolito modular):* para este tamaño habría sido más simple de operar, pero
+  no cumplía el requisito.
+- *Una base de datos compartida:* facilita las consultas, pero ata los servicios entre sí.
 
-## ADR-3: JWT RS256 validado con JWKS
+**Gano:** si se cae el servicio de perfiles, las cuentas y las transferencias siguen funcionando.
+**Pago:** no puedo hacer una operación que abarque varios servicios a la vez (lo resuelvo en la decisión 11), y hay
+tres bases de datos que mantener.
 
-**Contexto.** Tres servicios deben validar la identidad del cliente en cada petición sin llamar a ms-auth.
+## 3. Sesiones con tokens firmados (JWT RS256)
 
-**Decisión.**
-- ms-auth firma un JWT de 15 minutos con **RS256** y publica su clave pública en `/.well-known/jwks.json`.
-- Los demás servicios validan la firma, la expiración y el emisor (`iss = nexo-auth`), con el JWKS en caché y
-  timeouts cortos.
+**Qué decidí.** Al iniciar sesión, `ms-auth` entrega un token de 15 minutos firmado con su clave privada. Los otros
+servicios lo verifican con la clave pública, que guardan en memoria, **sin preguntarle a `ms-auth`**.
 
-**Alternativas.**
-- *HS256 con un secreto compartido:* más simple, pero cualquier servicio que valide podría también **emitir**
-  tokens. Además, rotar el secreto obliga a coordinar a todos.
-- *Tokens opacos con introspección:* revocación inmediata, pero cada petición hace una llamada a ms-auth. Suma
-  latencia y convierte a ms-auth en un punto único de falla.
+**Por qué.** Si cada petición tuviera que consultar a `ms-auth`, todo dependería de él y sería más lento.
 
-**Consecuencias.**
-- ✅ La validación es local: si ms-auth cae, se sigue validando con las claves en caché.
-- ✅ Solo ms-auth tiene la clave privada.
-- ❌ Un access token no se puede revocar antes de expirar; se mitiga con su vida de 15 minutos (ADR-4).
+**Otras opciones.**
+- *Una clave secreta compartida (HS256):* más simple, pero cualquier servicio podría **fabricar** tokens.
+- *Tokens sin información que se consultan cada vez:* permiten cerrar sesiones al instante, pero suman una llamada
+  en cada petición.
 
-## ADR-4: Refresh token opaco, rotativo y con detección de reutilización
+**Gano:** si `ms-auth` se cae, quien ya inició sesión sigue usando la app.
+**Pago:** no puedo invalidar un token antes de que venza. Por eso dura solo 15 minutos.
 
-**Contexto.** El access token es corto. La app necesita renovarlo sin pedir la contraseña, y un refresh token
-robado no debe valer indefinidamente.
+## 4. Un token de renovación que cambia en cada uso
 
-**Decisión.**
-- El refresh token son 256 bits aleatorios, con vida de 7 días. En la base de datos solo se guarda su SHA-256.
-- **Cada uso lo rota.** Si llega uno ya rotado, se asume robo y se revocan **todas** las sesiones del usuario.
+**Qué decidí.** Para no pedir la contraseña cada 15 minutos, la app tiene un token de renovación de 7 días.
+- **Cada vez que se usa, se cambia por uno nuevo.**
+- Si alguien usa uno viejo, asumo que fue robado y **cierro todas las sesiones** del usuario.
+- En la base de datos solo guardo una huella del token, nunca el token.
 
-**Alternativas.**
-- *Refresh token JWT de larga vida:* no requiere base de datos, pero no se puede revocar.
-- *Sin rotación:* más simple, pero un robo pasa desapercibido.
+**Por qué.** Un token de larga duración robado es peligroso. Así, el robo se detecta.
 
-**Consecuencias.**
-- ✅ Logout real.
-- ✅ El robo de un refresh token se detecta.
-- ✅ Una filtración de la base de datos no expone tokens utilizables.
-- ❌ Dos renovaciones simultáneas desde la misma app pueden invalidar la sesión. La app las encola: un solo refresh
-  a la vez.
+**Otras opciones.** Un token de renovación que no cambia es más simple, pero un robo pasaría inadvertido.
 
-## ADR-5: Login cifrado con JWE
+**Gano:** cierre de sesión real y detección de robos.
+**Pago:** si la app pidiera dos renovaciones a la vez, se cerraría la sesión. Por eso la app hace una sola a la vez.
 
-**Contexto.** TLS protege el tránsito, pero suele terminar en un balanceador o un proxy intermedio. Las credenciales
-quedan en claro dentro de esa infraestructura y pueden terminar en sus logs.
+## 5. El login viaja cifrado (JWE)
 
-**Decisión.**
-- La app cifra el cuerpo del login con la clave pública `enc` del JWKS (RSA-OAEP-256 + A256GCM) y lo envía como
-  `application/jose`.
-- ms-auth solo acepta ese algoritmo y la clave vigente (`kid`). También acepta JSON, para pruebas.
+**Qué decidí.** Además de HTTPS, la app cifra usuario y contraseña con una clave pública del backend. Solo
+`ms-auth` puede leerlos.
 
-**Alternativas.**
-- *Solo TLS:* es lo habitual y suficiente para muchos casos.
-- *Certificate pinning solamente:* protege contra ataques MITM, pero no dentro de la infraestructura propia.
+**Por qué.** HTTPS suele terminar en un equipo intermedio de la infraestructura (un balanceador). A partir de ahí,
+las credenciales viajarían legibles y podrían quedar en sus registros.
 
-**Consecuencias.**
-- ✅ Las credenciales viajan cifradas de punta a punta.
-- ❌ Más complejidad en la app.
-- ❌ Hay que gestionar la rotación de la clave de cifrado (la app reintenta si cambió el `kid`).
+**Otras opciones.** Solo HTTPS. Es lo habitual y suficiente en muchos casos, pero en un banco prefiero una capa más.
 
-## ADR-6: Transferencias dentro de ms-accounts, en una sola transacción
+**Gano:** la contraseña no es legible en ningún punto intermedio.
+**Pago:** más complejidad en la app, y la clave hay que renovarla de forma coordinada.
 
-**Contexto.** El alcance es transferir **entre cuentas propias**. Ambas cuentas están en la misma base de datos.
+## 6. Las transferencias se hacen en un solo paso
 
-**Decisión.** `POST /transfers/own` hace todo en **una transacción local**:
-1. Bloquea ambas cuentas.
-2. Valida que sean del cliente, que estén activas, la moneda y el saldo.
-3. Debita y acredita.
-4. Registra la transferencia y sus dos movimientos.
+**Qué decidí.** Como solo hay transferencias **entre cuentas propias**, y ambas cuentas están en la misma base de
+datos, todo ocurre en un único paso indivisible: reservar las dos cuentas, validar, debitar, acreditar y registrar
+los movimientos. O se hace todo, o no se hace nada.
 
-**Alternativas.**
-- *Servicio de transferencias separado con saga:* necesario para transferencias interbancarias o entre servicios.
-  Aquí agregaba consistencia eventual y compensaciones sin necesidad.
-- *Contabilidad por eventos (event sourcing):* auditoría perfecta, pero desproporcionado para el alcance.
+**Otras opciones.** Un servicio de pagos aparte, con varios pasos coordinados (una "saga"). Es necesario para
+transferir a otros bancos, pero aquí agregaba complejidad sin beneficio.
 
-**Consecuencias.**
-- ✅ Consistencia fuerte: o se hace todo, o no se hace nada.
-- ✅ El saldo siempre cuadra con los movimientos.
-- ❌ Si en el futuro hay transferencias a terceros, se necesitará un servicio de pagos con saga. Ver
-  `risks-and-scaling.md`.
+**Gano:** el saldo siempre cuadra con los movimientos, sin estados intermedios.
+**Pago:** para transferencias a terceros habría que construir ese servicio de pagos.
 
-## ADR-7: Idempotencia con `Idempotency-Key` y bloqueo pesimista ordenado
+## 7. Una transferencia nunca se ejecuta dos veces
 
-**Contexto.** En redes móviles una respuesta puede perderse y la app no sabe si la transferencia se hizo. Un usuario
-también puede tocar dos veces. Mover dinero dos veces es inaceptable.
+**El problema.** El cliente toca "Transferir" y la señal se cae: la app no sabe si se hizo. O el cliente toca dos
+veces seguidas.
 
-**Decisión.**
-- **Idempotencia.** El header `Idempotency-Key` es obligatorio y su unicidad se garantiza por cliente con un
-  `UNIQUE`. Se guarda una huella SHA-256 del contenido:
-  - Misma clave y mismo contenido: devuelve la transferencia original (200, `Idempotent-Replayed: true`).
-  - Misma clave con otro contenido: 409.
-- **Concurrencia.** `SELECT … FOR UPDATE` sobre ambas cuentas, **siempre en orden de id**, para que dos
-  transferencias cruzadas no provoquen un deadlock. La idempotencia se vuelve a verificar **después** de tomar el
-  bloqueo.
+**Qué decidí.**
+- **Un "número de recibo" por intento.** La app genera uno único (`Idempotency-Key`) y el backend lo guarda junto
+  con una huella del contenido:
+  - Mismo recibo y mismos datos: devuelvo la transferencia original y **no muevo dinero otra vez**.
+  - Mismo recibo con otros datos: rechazo con un conflicto (409).
+- **La app nunca reintenta sola una operación de dinero.** Si no recibió respuesta, le muestra al cliente "No
+  pudimos confirmar el resultado" y un botón **"Verificar estado"**, que reenvía el mismo recibo.
+- **Turnos para las cuentas.** Mientras una transferencia trabaja con dos cuentas, las reservo siempre en el mismo
+  orden. Así, dos transferencias cruzadas (A→B y B→A) no se bloquean mutuamente.
 
-**Alternativas.**
-- *Bloqueo optimista (versión):* evita esperas, pero con contención genera reintentos y errores que la app tendría
+**Otras opciones.**
+- *Detectar conflictos y reintentar (bloqueo optimista):* con mucha actividad genera errores que la app tendría
   que manejar.
-- *Cola por cuenta:* serializa sin locks, pero exige un broker y vuelve asíncrona una operación que el usuario
-  espera ver confirmada.
-- *Idempotencia en el gateway o en caché (Redis):* no es transaccional con el débito. Puede quedar registrada la
-  clave sin la transferencia, o al revés.
+- *Guardar los recibos fuera de la base (por ejemplo, en Redis):* podría quedar guardado el recibo sin la
+  transferencia, o al revés.
 
-**Consecuencias.**
-- ✅ Un doble toque o un reintento nunca duplican dinero. Lo cubre un test con 10 envíos simultáneos con la misma
-  clave.
-- ✅ No hay deadlocks en transferencias cruzadas. Lo cubre un test con 40 transferencias concurrentes.
-- ❌ Una cuenta con muchísimas operaciones simultáneas se serializa (*hot account*). Ver
-  `risks-and-scaling.md`.
+**Gano:** lo probé con 10 envíos simultáneos del mismo recibo (se creó una sola transferencia) y con 40
+transferencias cruzadas al mismo tiempo (sin bloqueos).
+**Pago:** si una sola cuenta recibiera miles de operaciones por segundo, esperarían en fila. En banca personas no
+pasa.
 
-## ADR-8: Paginación de movimientos por cursor
+## 8. Los movimientos se cargan por "marcador" y no por número de página
 
-**Contexto.** La app muestra los movimientos con scroll infinito, y pueden entrar movimientos nuevos mientras el
-usuario hace scroll.
+**El problema.** La app carga los movimientos a medida que el usuario hace scroll. Si entra un movimiento nuevo
+mientras tanto, la paginación por número ("dame la página 2") repite o se salta filas.
 
-**Decisión.** Se pagina por `(booked_at, id)` con un cursor opaco (Base64), usando el índice
-`(account_id, booked_at DESC, id DESC)`. Se pide un elemento de más para saber si hay página siguiente, sin `COUNT`.
+**Qué decidí.** Cada página devuelve un marcador ("continúa desde aquí") basado en la fecha del último movimiento.
 
-**Alternativas.**
-- *Offset (`page=N`):* simple, pero un movimiento nuevo desplaza las páginas: hay duplicados o faltantes. Además,
-  es más lento con offsets grandes.
+**Otras opciones.** Paginación por número de página: más simple, pero con duplicados y cada vez más lenta.
 
-**Consecuencias.**
-- ✅ Sin duplicados ni saltos.
-- ✅ Rendimiento constante en cualquier página.
-- ❌ No se puede saltar a la página 7 ni mostrar el total (no se necesita en móvil).
+**Gano:** sin duplicados y la misma velocidad en cualquier página.
+**Pago:** no se puede saltar a la página 7 ni mostrar el total (en el celular no hace falta).
 
-## ADR-9: Experiencia dinámica (SDUI) guardada en base de datos
+## 9. El home se arma desde la base de datos (SDUI)
 
-**Contexto.** El negocio quiere cambiar el home por segmento y lanzar campañas **sin publicar una versión nueva** de
-la app.
+**El problema.** El negocio quiere mostrar cosas distintas a cada tipo de cliente y lanzar campañas **sin publicar
+una versión nueva de la app**.
 
-**Decisión.**
-- **Datos.** `experience_components` guarda cada bloque de una pantalla: tipo, posición, `props` en JSONB y filtros
-  opcionales (segmento, cliente, ventana de fechas, franja horaria, si es promoción).
-- **Composición.** El `ExperienceComposer` filtra según el cliente y sus preferencias, ordena y personaliza los
-  textos. La respuesta lleva ETag.
-- **App.** Dibuja los tipos que conoce e **ignora los desconocidos**.
+**Qué decidí.** El home es una lista de bloques guardados en la base de datos. Cada bloque tiene un tipo (saludo,
+cuentas, banner, tipo de cambio…), un orden y para quién aplica: un segmento, un cliente, unas fechas, un horario.
+El backend arma la lista para cada cliente, y la app dibuja los bloques que conoce e **ignora los que no**.
 
-**Alternativas.**
-- *Firebase Remote Config:* bueno para flags, pero no conoce el segmento del banco ni los datos del cliente.
-  Además, sería otra fuente de verdad.
-- *Actualizaciones de código over-the-air (Shorebird):* cambian comportamiento, no contenido por cliente, y tienen
-  restricciones en las tiendas.
-- *Home fijo en la app:* cada cambio requiere publicar una versión nueva.
+**Otras opciones.**
+- *Firebase Remote Config:* bueno para encender o apagar funciones, pero no conoce los datos del banco.
+- *Home fijo en la app:* cada cambio obliga a publicar en las tiendas.
 
-**Consecuencias.**
-- ✅ Activar una fila cambia el home al instante (`scripts/experience.sh`).
-- ✅ Se pueden publicar tipos nuevos sin romper versiones viejas de la app.
-- ❌ Hoy se configura con SQL: en producción hace falta un backoffice con validación y auditoría.
-- ❌ Un componente mal configurado llega a todos. La app lo mitiga con una caché y un layout de respaldo.
+**Gano:** activar una campaña es cambiar una fila; se ve al instante (`scripts/experience.sh`).
+**Pago:** hoy se configura con SQL; en producción haría falta una pantalla de administración con revisión. Un
+bloque mal cargado llega a todos (la app lo mitiga con un home de respaldo).
 
-## ADR-10: Nginx como gateway
+## 10. Una sola puerta de entrada: Nginx
 
-**Contexto.** La app necesita una sola URL. Las rutas internas no deben exponerse. Además, se quería un lugar
-común para el rate limit, los timeouts y el correlation-id.
+**Qué decidí.** La app habla con una sola dirección (el gateway), que:
+- Reparte cada petición al servicio correcto.
+- Bloquea las rutas internas.
+- Limita los intentos de login por IP.
+- Corta las peticiones que tardan más de 10 segundos.
+- Responde un error claro si un servicio no está.
+- Nunca reintenta por su cuenta (un pago no se puede repetir a ciegas).
 
-**Decisión.** Nginx enruta por prefijo:
-- Bloquea `/internal` y `/actuator` (404).
-- Aplica rate limit: 20 logins por minuto por IP y 30 peticiones por segundo en el resto.
-- Genera o respeta `X-Correlation-Id`.
-- Corta a los 10 s.
-- **Nunca reintenta** (un POST de dinero no es seguro de repetir).
-- Si un servicio no responde, devuelve un 503 en formato `ProblemDetail`.
-- Hace de proxy hacia la API externa de tipo de cambio sin reenviar el token del cliente.
+**Otras opciones.**
+- *Spring Cloud Gateway:* otro servicio Java más que mantener.
+- *Un gateway gestionado (Kong, AWS API Gateway):* lo usaría en producción, pero es demasiado para el entorno
+  local.
 
-**Alternativas.**
-- *Spring Cloud Gateway:* filtros en Java y descubrimiento de servicios, pero es otro servicio JVM que mantener.
-- *Kong o un API Gateway gestionado (AWS API Gateway, Apigee):* es lo indicado en producción (planes, cuotas,
-  analítica), pero excesivo para el entorno local.
+**Gano:** liviano, simple y fácil de revisar.
+**Pago:** funciones avanzadas, como límites por usuario, requerirían un gateway más completo.
 
-**Consecuencias.**
-- ✅ Liviano, declarativo y fácil de auditar.
-- ❌ La lógica avanzada (rate limit por usuario, autenticación en el borde) requiere módulos o un gateway gestionado.
+## 11. El registro deshace lo que alcanzó a crear si algo falla
 
-## ADR-11: Onboarding síncrono con compensación
+**El problema.** Registrarse crea cosas en tres servicios: el usuario, el cliente y su cuenta. No hay forma de
+hacerlo todo "de una vez" entre servicios distintos.
 
-**Contexto.** Registrarse crea datos en tres servicios: credenciales en ms-auth, cliente en ms-customer y cuenta en
-ms-accounts. No hay transacción distribuida.
+**Qué decidí.**
+- Crear **primero** el cliente y la cuenta, y **al final** el usuario.
+- Si la cuenta no se puede abrir, **borro el cliente** que alcancé a crear y respondo "intenta de nuevo".
+- Cada intento usa un identificador nuevo, así que reintentar es seguro.
 
-**Decisión.**
-- ms-auth provisiona **primero** el cliente y la cuenta, y **solo si ambos responden** crea las credenciales.
-- Las provisiones son idempotentes por `customerId`.
-- Si la apertura de la cuenta falla, se **descarta el cliente recién creado** (`DELETE /internal/customers/{id}`).
-- Cada intento usa un `customerId` nuevo, así que reintentar es seguro.
+**Otras opciones.** Un registro en segundo plano con mensajes entre servicios: más robusto ante caídas largas, pero
+el usuario no sabría al instante si su cuenta quedó lista.
 
-**Alternativas.**
-- *Saga asíncrona con outbox y broker:* más robusta ante caídas largas, pero el usuario no recibe una respuesta
-  inmediata ("tu cuenta está lista").
-- *Crear las credenciales primero:* si falla después, queda un usuario que puede iniciar sesión pero no tiene
-  cuenta.
+**Gano:** nunca queda un usuario que pueda iniciar sesión sin cuenta. Lo probé apagando `ms-accounts` en medio de
+un registro.
+**Pago:** el registro necesita los tres servicios funcionando.
 
-**Consecuencias.**
-- ✅ El usuario sabe al instante si se registró.
-- ✅ Nunca quedan credenciales sin cliente.
-- ❌ Si falla también la compensación, queda un cliente huérfano (sin usuario, no puede iniciar sesión). Hay que
-  limpiarlo con un job.
-- ❌ El registro depende de que los tres servicios estén arriba.
+## 12. Cifro la cédula y el teléfono antes de guardarlos
 
-## ADR-12: Cifrado en reposo en la aplicación (AES-256-GCM)
+**Qué decidí.** La cédula y el teléfono se guardan cifrados (AES-256-GCM). En la base de datos se ve algo como
+`v1:TrqNxIOz…`. La clave vive fuera del código y, sin ella, el servicio no arranca.
 
-**Contexto.** La cédula y el teléfono son datos personales sensibles. Una copia de la base de datos o un acceso
-indebido no debería exponerlos.
+**Por qué.** Si alguien obtiene una copia de la base de datos, no debería poder leer datos personales.
 
-**Decisión.**
-- Se cifran en la aplicación con AES-256-GCM, mediante un `AttributeConverter` de JPA. Formato: `v1:<base64>`, con
-  un IV aleatorio por valor.
-- La clave sale de `CUSTOMER_DATA_KEY`. Sin ella, el servicio no arranca.
-- Una migración Java (`V101`) cifró los datos existentes.
+**Otras opciones.** Cifrar solo el disco. Protege si roban el disco, pero no si alguien entra a la base de datos
+con un usuario válido.
 
-**Alternativas.**
-- *Cifrado del disco o de la base de datos (TDE, RDS con KMS):* transparente, pero no protege ante un acceso con
-  credenciales de la base de datos ni ante un dump.
-- *`pgcrypto` en PostgreSQL:* la clave tendría que viajar en las consultas y podría quedar en los logs de la base
-  de datos.
+**Gano:** una copia de la base de datos no expone esos datos, y si alguien los altera, se detecta.
+**Pago:** no puedo buscar clientes por cédula, y perder la clave sería perder esos datos.
 
-**Consecuencias.**
-- ✅ En la base de datos solo hay texto cifrado y autenticado: una alteración se detecta.
-- ✅ El prefijo de versión permite rotar la clave.
-- ❌ No se puede buscar por cédula; haría falta un *blind index* (HMAC).
-- ❌ La gestión de la clave pasa a ser crítica: perderla es perder los datos.
+## 13. Las notificaciones salen después de confirmar la transferencia
 
-## ADR-13: Notificaciones: ms-customer es el dueño y el aviso es asíncrono tras el commit
+**Qué decidí.** Cuando una transferencia se confirma, `ms-accounts` avisa a `ms-customer` **en segundo plano**.
+`ms-customer` es quien conoce el idioma, la preferencia de notificaciones y los teléfonos del cliente; arma el
+mensaje y lo envía por Firebase.
 
-**Contexto.** Al completarse una transferencia hay que avisar al cliente. El evento ocurre en ms-accounts, pero el
-idioma, la preferencia "recibir notificaciones" y los dispositivos están en ms-customer.
+**Por qué.** La transferencia no debe esperar ni fallar por culpa de un aviso. Y un aviso nunca debe salir si la
+transferencia no se completó.
 
-**Decisión.**
-- ms-accounts llama a `POST /internal/notifications` de ms-customer **después del commit y en segundo plano**
-  (hilos virtuales, timeouts cortos y propagación del correlation-id).
-- ms-customer arma el texto en el idioma del cliente, respeta su preferencia y envía a cada dispositivo por FCM.
-  Sin credenciales de FCM, escribe la notificación en el log.
-- Los tokens que FCM reporta como inválidos se borran.
+**Otras opciones.** Una cola de mensajes (Kafka o RabbitMQ) garantiza la entrega, pero agrega infraestructura. Es el
+siguiente paso natural.
 
-**Alternativas.**
-- *Enviar el push desde ms-accounts:* duplica las preferencias y los dispositivos en dos servicios.
-- *Outbox y broker (Kafka, RabbitMQ):* entrega garantizada y desacople total. Es la evolución natural, pero agrega
-  infraestructura.
+**Gano:** transferencias rápidas y sin avisos falsos.
+**Pago:** si `ms-customer` está caído justo en ese momento, ese aviso se pierde. La transferencia sí queda hecha.
 
-**Consecuencias.**
-- ✅ La transferencia nunca espera ni falla por una notificación.
-- ✅ Un rollback no genera un aviso falso.
-- ❌ Es de mejor esfuerzo: si ms-customer está caído en ese momento, el aviso se pierde. La app muestra el
-  comprobante igual.
+## 14. Un simulador de fallas para demostrar la resiliencia
 
-## ADR-14: Toxiproxy para demostrar la resiliencia
+**Qué decidí.** Puse Toxiproxy entre el gateway y los servicios. Con un comando le agrego lentitud a un servicio o
+lo "desconecto", y muestro en vivo cómo reacciona la app.
 
-**Contexto.** La prueba pide explicar **y demostrar** el comportamiento con conectividad limitada y caídas parciales.
+**Otras opciones.** Apagar contenedores: solo simula caídas, no lentitud.
 
-**Decisión.** Toxiproxy se ubica entre el gateway y cada servicio. Los scripts de `chaos/` agregan latencia, cortan
-un servicio o restauran todo usando su API.
+**Gano:** una demo repetible de lo que pide la prueba: conectividad limitada y caídas parciales.
+**Pago:** un paso extra de red en el entorno local. En producción no se instala.
 
-**Alternativas.**
-- *Detener contenedores:* solo simula caídas, no latencia.
-- *Chaos Mesh o Gremlin:* pensados para Kubernetes o producción; excesivos para una demo local.
+## 15. Montos como texto y errores con un código claro
 
-**Consecuencias.**
-- ✅ Demo repetible y en vivo: latencia, timeout del gateway, caída parcial y recuperación.
-- ❌ Un salto de red adicional en el entorno local. En producción no se despliega.
+**Qué decidí.**
+- **Montos:** viajan como texto (`"125.50"`).
+- **Errores:** siempre tienen la misma forma, con un código fijo (`insufficient-funds`, `account-not-owned`…) y un
+  identificador para rastrearlos.
 
-## ADR-15: Contrato de API: montos como texto y errores `ProblemDetail`
+**Por qué.**
+- Los números con decimales pierden precisión en el celular: 0,1 + 0,2 no da exactamente 0,3.
+- Con un código fijo, la app muestra el mensaje correcto en el idioma del cliente.
 
-**Contexto.** La app y el backend deben entenderse sin ambigüedad sobre el dinero y los errores.
+**Otras opciones.** Montos en centavos (enteros): evitan el problema, pero es fácil confundirse de escala en la
+interfaz.
 
-**Decisión.**
-- **Montos:** texto con dos decimales (`"125.50"`). En el backend son `BigDecimal` y `NUMERIC(19,2)`.
-- **Fechas:** ISO-8601 en UTC.
-- **Errores:** `ProblemDetail` (RFC 7807) con un `code` estable y el `correlationId`.
-
-**Alternativas.**
-- *Montos como número JSON:* se convierten a `double` en el cliente y hay errores de redondeo.
-- *Montos en centavos (entero):* evita el redondeo, pero es propenso a confusiones de escala en la interfaz.
-- *Errores libres:* la app tendría que interpretar textos.
-
-**Consecuencias.**
-- ✅ Sin errores de redondeo.
-- ✅ La app traduce cada `code` a un mensaje en su idioma.
-- ✅ Soporte puede rastrear cualquier error por su `correlationId`.
-- ❌ La app debe convertir el texto a su tipo de dinero.
+**Gano:** cero errores de redondeo y errores fáciles de explicar y de rastrear.
+**Pago:** la app tiene que convertir el texto a su tipo de dinero.

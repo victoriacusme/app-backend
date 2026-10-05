@@ -1,100 +1,128 @@
-# Riesgos, escalamiento y despliegue
+# Riesgos, crecimiento y puesta en producción
 
-Qué puede salir mal, cómo se mitiga hoy, cómo crecería la plataforma y cómo se desplegaría en producción.
-Los riesgos de seguridad se detallan en [`security.md`](security.md); el monitoreo, en
-[`monitoring.md`](monitoring.md).
+En pocas palabras: **qué podría salir mal, qué hice para evitarlo, cómo crecería el sistema si llegan muchos más
+clientes y cómo lo pondría en producción.**
 
-## Riesgos
+> Más detalle: seguridad en [`security.md`](security.md) y monitoreo en [`monitoring.md`](monitoring.md).
 
-Probabilidad e impacto: **A** (alto), **M** (medio), **B** (bajo).
+---
 
-### Técnicos y de operación
+## 1. Riesgos: qué podría salir mal
 
-| Riesgo | Prob. | Impacto | Mitigación actual | Siguiente paso |
-|---|---|---|---|---|
-| **Dinero duplicado** por reintentos de la app o doble toque | M | A | `Idempotency-Key` obligatoria con `UNIQUE` por cliente, huella del contenido y verificación después del bloqueo. Probado con envíos simultáneos | Expirar las claves viejas (ver escalamiento) |
-| **Saldo inconsistente** por concurrencia | M | A | Transacción única, `FOR UPDATE` en orden de id y `CHECK (balance >= 0)` en la base de datos. Probado con 30 débitos simultáneos | Conciliación diaria saldo vs. movimientos |
-| **Cuenta con mucha contención** (*hot account*): muchas transferencias simultáneas sobre la misma cuenta | B | M | El bloqueo serializa; timeout de transacción de 10 s | Ver escalamiento: cola por cuenta para casos extremos |
-| **Caída de un servicio** | M | M | Una base de datos por servicio; gateway con 503 en formato `ProblemDetail`; la app degrada por sección (caché, secciones independientes) | Varias réplicas por servicio |
-| **ms-auth caído**: nadie puede iniciar sesión | B | A | Los demás servicios validan con el JWKS en caché, así que las sesiones abiertas siguen funcionando | Réplicas, y claves fijas en un gestor de secretos |
-| **Base de datos lenta o saturada** | M | A | Timeouts de conexión (3 s), de consulta (5 s) y de transacción (10 s): se falla rápido en vez de colgar | Réplicas de lectura, PgBouncer, alertas del pool |
-| **Onboarding a medias** (un servicio falla en el registro) | M | B | Credenciales al final, compensación del cliente y provisión idempotente | Job que limpie clientes huérfanos; saga con outbox si crece el volumen |
-| **Notificación perdida** si ms-customer está caído al transferir | M | B | Es de mejor esfuerzo; la transferencia no se afecta y la app muestra el comprobante | Outbox y broker con reintentos |
-| **Proveedor externo de tipo de cambio** caído o con cambios en su API | M | B | Proxy por el gateway con timeouts; la app cachea y oculta solo ese bloque | Caché en el gateway; segundo proveedor |
-| **Configuración SDUI errónea** publicada en la base de datos | M | M | La app ignora tipos desconocidos y tiene un layout de respaldo y caché | Backoffice con validación, vista previa y auditoría de cambios |
-| **Migración de base de datos que rompe** un despliegue | B | A | Flyway versionado y probado en CI con PostgreSQL real (Testcontainers) | Migraciones *expand/contract* (ver despliegue) |
-| **Pérdida de la clave de cifrado** de datos personales | B | A | Clave obligatoria y externa al código | KMS con copia de seguridad y rotación (`v2:`) |
-| **Claves JWT efímeras** en desarrollo | A | B | Solo afecta al entorno local | Claves en un gestor de secretos, con rotación vía JWKS |
+Ordenados de más grave a menos grave. 🔴 grave · 🟡 molesto · 🟢 menor.
 
-### De producto y del proyecto
+### 🔴 Que el dinero se mueva dos veces
 
-| Riesgo | Mitigación |
+**Cómo pasaría:** el cliente toca "Transferir" y la señal se cae justo en ese momento: la app no sabe si se hizo.
+Si el cliente vuelve a intentarlo, podría transferir dos veces. O toca el botón dos veces seguidas.
+
+**Qué hice:**
+- Cada intento de transferencia lleva un "número de recibo" único (`Idempotency-Key`). Si llega dos veces el mismo
+  recibo, el backend **no vuelve a mover el dinero**: devuelve la transferencia original.
+- La app **nunca reintenta sola** una operación de dinero. Si no recibió respuesta, muestra "No pudimos confirmar el
+  resultado" y un botón **"Verificar estado"**, que reenvía el mismo recibo.
+✅ Probado enviando el mismo recibo 10 veces al mismo tiempo: se creó **una sola** transferencia.
+
+### 🔴 Que un saldo quede mal
+
+**Cómo pasaría:** dos transferencias sobre la misma cuenta al mismo tiempo. Las dos leen "saldo $100" y las dos
+gastan $100.
+
+**Qué hice:** mientras una transferencia trabaja con una cuenta, **la cuenta queda reservada** y la otra espera
+su turno. Además, la base de datos rechaza cualquier saldo negativo.
+✅ Probado lanzando a la vez 30 transferencias de $10 desde una cuenta con $100: pasaron exactamente 10 y el
+saldo quedó en $0, nunca en negativo.
+
+### 🔴 Que se caiga el servicio de login
+
+**Cómo pasaría:** el servicio que valida usuario y contraseña deja de responder.
+
+**Qué hice:** quien **ya inició sesión puede seguir usando la app**, porque los otros servicios verifican su
+sesión sin preguntarle al servicio de login. Solo los inicios de sesión nuevos fallan hasta que vuelva.
+
+### 🔴 Perder la clave que protege los datos personales
+
+**Cómo pasaría:** la cédula y el teléfono se guardan cifrados (ilegibles sin una clave). Si esa clave se pierde,
+esos datos se pierden.
+
+**Qué haría en producción:** guardarla en un servicio especializado en claves (AWS KMS), con copia de seguridad.
+
+### 🟡 Que se caiga un servicio cualquiera
+
+**Qué hice:** cada servicio es independiente. Si se cae el de perfiles, **las cuentas y las transferencias
+siguen funcionando**. La app muestra lo que tiene guardado y solo la parte afectada avisa que no está disponible.
+✅ Se demuestra en vivo con los scripts de `chaos/` (ver el README).
+
+### 🟡 Que la base de datos se ponga lenta
+
+**Qué hice:** si la base no responde en 3 segundos, se corta y se avisa. Es mejor un error rápido que una app
+"congelada" esperando.
+
+### 🟡 Publicar por error un home mal configurado
+
+**Cómo pasaría:** el home se arma desde la base de datos (así el negocio lo cambia sin publicar la app). Alguien
+podría cargar un componente roto.
+
+**Qué hice:** la app ignora lo que no entiende y tiene un home de respaldo.
+**Siguiente paso:** una pantalla de administración con vista previa y aprobación antes de publicar.
+
+### 🟢 Riesgos menores
+
+| Qué podría pasar | Qué pasa hoy |
 |---|---|
-| Alcance limitado a transferencias entre cuentas propias | Decisión explícita (ADR-6). Las transferencias a terceros requieren un servicio de pagos con saga, límites, antifraude e integración con la red interbancaria |
-| Código repetido entre servicios (seguridad, `ProblemDetail`, correlation-id) | Aceptado para mantener la autonomía. Si crece, se extrae a una librería interna versionada |
-| Datos de prueba en las migraciones (`db/seed`) | Solo se cargan en desarrollo; en producción, `FLYWAY_LOCATIONS=classpath:db/migration` |
+| Un registro de usuario queda a medias porque un servicio falló | Se deshace lo que alcanzó a crearse; el usuario puede reintentar sin problema |
+| No llega la notificación de una transferencia | La transferencia **sí** se hizo y la app muestra el comprobante; solo se pierde el aviso |
+| Se cae la API externa del tipo de cambio | La app oculta solo ese bloque; todo lo demás sigue igual |
 
-## Escalamiento
+### Limitaciones conocidas (decisiones conscientes, no errores)
 
-### Servicios
+- **Solo transferencias entre cuentas propias.** Enviar dinero a otras personas o bancos necesita más piezas:
+  límites, antifraude y conexión con la red bancaria.
+- **Algo de código repetido entre servicios.** Se aceptó para que cada servicio sea independiente.
 
-Los tres servicios son **stateless**: la sesión vive en el JWT y el estado en sus bases de datos. Por eso escalan
-**horizontalmente** agregando réplicas detrás del balanceador, sin afinidad de sesión.
-- La CPU del login la consume Argon2 (deliberadamente costoso): ms-auth escala por CPU.
-- ms-accounts y ms-customer escalan por peticiones y latencia (HPA en Kubernetes).
-- Cada servicio escala por separado, según su propia carga.
+---
 
-### Bases de datos
+## 2. Crecimiento: si llegan muchos más clientes
 
-| Presión | Solución |
+### Más copias de cada servicio
+
+Los servicios no guardan nada "en memoria" sobre el cliente: todo está en el token de sesión o en la base de datos.
+Por eso, **si hay más tráfico, se levantan más copias** del mismo servicio y se reparten las peticiones. Cada
+servicio crece por separado: si el día de pago todos consultan saldos, solo se multiplica el de cuentas.
+
+### Bases de datos más grandes
+
+| Problema al crecer | Solución |
 |---|---|
-| Lecturas de cuentas y movimientos (lo más frecuente) | Réplicas de lectura para las consultas; las escrituras siguen en el primario |
-| Crecimiento de `movements` | Particionar por fecha (`booked_at`, mensual). El índice actual `(account_id, booked_at DESC, id DESC)` y la paginación por cursor siguen funcionando |
-| Muchas conexiones al escalar réplicas | PgBouncer en modo transacción delante de PostgreSQL |
-| Crecimiento de `transfers` (claves de idempotencia) | Archivar las claves pasadas la ventana de reintento (por ejemplo, 30 días) y conservar las transferencias en histórico |
-| `refresh_tokens` revocados o vencidos | Job de limpieza periódico |
+| Muchísimas consultas de saldos y movimientos | **Copias de solo lectura** de la base: las consultas van a las copias y las transferencias a la principal |
+| La tabla de movimientos crece sin parar | **Dividirla por mes**: cada consulta busca solo en los meses que necesita |
+| Datos viejos que ya no sirven (recibos antiguos, sesiones vencidas) | Limpieza automática periódica |
 
-### Operaciones de dinero
+### Avisos entre servicios más confiables
 
-- **Hot accounts:** si una cuenta recibe una cantidad extrema de operaciones simultáneas (por ejemplo, la de un
-  comercio), se encolan sus operaciones y se procesan en serie por cuenta (partición por `account_id` en un broker).
-  Para el caso de banca personas no hace falta.
-- **Transferencias a terceros e interbancarias:** un servicio de pagos con una saga y outbox: reservar fondos,
-  enviar a la red y confirmar o liberar. El débito local deja de ser inmediato y la app pasa a mostrar estados como
-  "en proceso".
+Hoy, si un servicio está caído justo cuando otro le avisa algo (por ejemplo, "manda esta notificación"), el aviso se
+pierde. Al crecer, se agregaría un **buzón intermedio** (una cola de mensajes, como Kafka): el aviso queda guardado y
+se entrega cuando el servicio vuelva.
 
-### Eventos entre servicios
+---
 
-Hoy las notificaciones y el onboarding usan llamadas HTTP síncronas o de mejor esfuerzo. Al crecer, la evolución es
-el **patrón outbox**: cada servicio escribe el evento en su base de datos en la misma transacción y un proceso lo
-publica en un broker (Kafka o RabbitMQ). Se gana entrega garantizada, reintentos y nuevos consumidores (antifraude,
-analítica) sin tocar el servicio que emite el evento.
+## 3. Puesta en producción
 
-### Lecturas costosas
-
-- **Home (SDUI):** ya usa ETag (304 si no cambió). Los componentes configurados se pueden cachear en memoria con
-  un TTL corto, porque cambian poco.
-- **Tipo de cambio:** caché en el gateway (por ejemplo, 5 minutos). Así se respeta el límite del proveedor y se
-  responde aunque esté caído.
-
-## Despliegue en producción
-
-### Topología propuesta (ejemplo en AWS; equivalente en otras nubes)
+### Cómo se vería
 
 ```mermaid
 flowchart TB
-    app["📱 App"] -->|"HTTPS"| edge["CDN + WAF"]
-    edge --> gw["API Gateway gestionado<br/>o ALB + Nginx<br/>TLS · rate limit"]
+    app["📱 App"] -->|"conexión segura"| edge["Puerta de entrada<br/>firewall · límites de uso"]
 
-    subgraph k8s["Kubernetes (EKS) · varias zonas de disponibilidad · mTLS entre servicios"]
-        auth["ms-auth × N"]
-        cust["ms-customer × N"]
-        acc["ms-accounts × N"]
+    subgraph nube["Nube · servidores en varias ubicaciones"]
+        auth["Login × varias copias"]
+        cust["Clientes × varias copias"]
+        acc["Cuentas × varias copias"]
     end
 
-    gw --> auth & cust & acc
+    edge --> auth & cust & acc
 
-    subgraph rds["RDS PostgreSQL Multi-AZ · backups · réplicas de lectura"]
+    subgraph datos["Bases de datos con respaldo automático"]
         adb[("auth_db")]
         cdb[("customer_db")]
         accdb[("accounts_db")]
@@ -104,37 +132,30 @@ flowchart TB
     cust --> cdb
     acc --> accdb
 
-    secrets["🔑 Secrets Manager / KMS"] -.-> k8s
-    obs["📈 Observabilidad<br/>(ver monitoring.md)"] -.-> k8s
-    cust --> fcm["🔔 FCM"]
+    claves["🔑 Bóveda de claves"] -.-> nube
 ```
 
-- **Alta disponibilidad:** al menos 2 réplicas por servicio en zonas distintas, y bases de datos Multi-AZ con
-  failover automático.
-- **Secretos:** las claves JWT, la API key interna, la clave de datos personales y las credenciales de FCM y de la
-  base de datos salen de un gestor de secretos, nunca del repositorio ni del compose.
-- **Red:** los servicios y las bases de datos en subredes privadas; solo el borde es público.
+- **Sin un único punto de falla:** cada servicio corre en al menos dos lugares distintos. Si se cae un servidor (o
+  un centro de datos completo), el otro sigue atendiendo.
+- **Claves en una bóveda:** las contraseñas del sistema nunca están en el código. Viven en un servicio
+  especializado (AWS Secrets Manager o similar).
+- **Todo privado salvo la entrada:** los servicios y las bases de datos no son accesibles desde internet.
 
-### Entrega continua
+### Cómo se publica una versión nueva sin afectar a los clientes
 
-1. **CI** (ya existe): en cada PR se compila y se ejecutan las pruebas unitarias y de integración con PostgreSQL
-   real; también se validan el compose y el gateway.
-2. **Imagen versionada** por commit, escaneada en busca de vulnerabilidades, y publicada en un registro privado.
-3. **Despliegue gradual** (*canary* o *blue/green*): primero un pequeño porcentaje del tráfico. Se avanza si los SLO
-   se mantienen (ver `monitoring.md`) y se revierte automáticamente si no.
-4. **Migraciones *expand/contract*:** primero se agrega lo nuevo sin romper lo viejo (columna nueva, por ejemplo);
-   se despliega el código que usa ambos; y en un release posterior se elimina lo viejo. Así, la versión anterior
-   sigue funcionando durante el despliegue y un rollback es seguro.
-5. **Compatibilidad con la app:** los cambios de API son aditivos y la app ignora los campos y componentes SDUI
-   desconocidos. Si hace falta romper el contrato, se versiona la ruta y se mantiene la anterior mientras haya
-   versiones de la app que la usen.
+1. **Pruebas automáticas** en cada cambio (ya existen: el CI de GitHub).
+2. **Primero a pocos:** la versión nueva atiende solo a un 5 % de los clientes.
+3. **Si todo va bien, a todos.** Si aumentan los errores, **se vuelve atrás sola**.
+4. **Cambios a la base de datos en dos pasos:** primero se agrega lo nuevo sin borrar lo viejo, y lo viejo se
+   elimina en una versión posterior. Así, volver atrás nunca rompe nada.
+5. **La app vieja sigue funcionando:** el backend solo agrega cosas y la app ignora lo que no conoce. Nadie está
+   obligado a actualizar.
 
-### Respaldo y recuperación
+### Respaldos
 
-| Dato | Estrategia | Objetivo |
+| Qué | Cómo | Cuánto se podría perder como máximo |
 |---|---|---|
-| Bases de datos | Backups automáticos con *point-in-time recovery* y réplica en otra región | RPO ≤ 5 min · RTO ≤ 1 h |
-| Clave de datos personales | En KMS, con copia de seguridad de la clave | Sin ella los datos cifrados son irrecuperables |
-| Configuración SDUI | Versionada y auditada (backoffice) | Volver a la versión anterior en segundos |
+| Bases de datos | Copia automática continua, también en otra región | 5 minutos de datos; el servicio vuelve en menos de 1 hora |
+| Clave de datos personales | Guardada en la bóveda con copia de seguridad | Nada: sin ella los datos cifrados serían irrecuperables |
 
-Las restauraciones se ensayan periódicamente: un backup que nunca se restauró no es un backup confiable.
+Las restauraciones se ensayan cada cierto tiempo: **un respaldo que nunca se probó no es confiable.**

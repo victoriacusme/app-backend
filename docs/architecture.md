@@ -1,10 +1,11 @@
-# Arquitectura
+# Cómo está armado el backend
 
-Vista general del backend de Nexo Bank y de sus flujos críticos. Las razones de cada decisión están en
-[`decisions.md`](decisions.md); los riesgos y el despliegue en producción, en
-[`risks-and-scaling.md`](risks-and-scaling.md).
+Este documento muestra, con diagramas, cómo están conectadas las piezas y cómo funcionan los flujos más
+importantes: iniciar sesión, transferir, registrarse y armar el home. Los diagramas se leen de arriba hacia abajo.
 
-## 1. Componentes
+> Las razones detrás de cada decisión están en [`decisions.md`](decisions.md).
+
+## 1. Las piezas y cómo se conectan
 
 ```mermaid
 flowchart TB
@@ -44,15 +45,17 @@ flowchart TB
     cust -->|"push"| fcm
 ```
 
-- **Línea continua:** tráfico de la app.
-- **Línea punteada:** llamadas entre servicios por la red interna. Las rutas `/internal/**` exigen API key y el
-  gateway no las expone.
-- **Validación de tokens:** ms-customer y ms-accounts validan el JWT localmente con las claves públicas de ms-auth
-  (JWKS), que guardan en caché. No llaman a ms-auth en cada petición.
-- **Datos compartidos:** ningún servicio lee la base de datos de otro. Se relacionan solo por el `customerId`, que
-  viaja como `sub` en el JWT.
+**Cómo leerlo:**
+- **La app habla con una sola puerta (el gateway).** El gateway reparte cada petición al servicio que
+  corresponde.
+- **Toxiproxy** está en el medio solo para simular fallas en las demos. En producción no existe.
+- **Tres servicios, cada uno con su propia base de datos.** Ninguno lee la base de datos de otro.
+- **Las líneas punteadas** son conversaciones internas entre servicios, protegidas con una clave. La app no puede
+  llamarlas.
+- **Para verificar la sesión**, `ms-customer` y `ms-accounts` no le preguntan a `ms-auth` en cada petición: usan la
+  clave pública que guardaron en memoria.
 
-## 2. Capas dentro de cada servicio (hexagonal)
+## 2. Cómo está organizado cada servicio por dentro
 
 ```mermaid
 flowchart LR
@@ -84,13 +87,16 @@ flowchart LR
     jpa --- crypto
 ```
 
-Las dependencias apuntan hacia el dominio: el dominio no conoce Spring, JPA ni HTTP. Por eso los casos de uso se
-prueban con Mockito, y los adaptadores aparte, contra PostgreSQL real.
+**La idea:** las reglas del banco (el dominio) están en el centro y no dependen de nada técnico. Alrededor están
+las piezas que se pueden cambiar: la base de datos, las llamadas a otros servicios, las notificaciones. Gracias a
+eso, las reglas se prueban en milisegundos y sin base de datos.
 
-## 3. Modelo de datos
+## 3. Qué se guarda en cada base de datos
 
-Cada base pertenece a un solo servicio. El `customer_id` se repite entre bases como **referencia lógica**, sin llave
-foránea entre servicios.
+Cada servicio tiene su base. El identificador del cliente (`customer_id`) se repite entre ellas para relacionarlas,
+pero ninguna se conecta directamente con otra.
+
+**Usuarios y sesiones** (`ms-auth`): la contraseña nunca se guarda, solo una huella irreversible (Argon2).
 
 ```mermaid
 erDiagram
@@ -113,7 +119,7 @@ erDiagram
     }
 ```
 
-<p align="center"><em>auth_db (ms-auth)</em></p>
+**Clientes, preferencias y home** (`ms-customer`): la cédula y el teléfono se guardan cifrados.
 
 ```mermaid
 erDiagram
@@ -157,7 +163,7 @@ erDiagram
     }
 ```
 
-<p align="center"><em>customer_db (ms-customer)</em></p>
+**Cuentas y dinero** (`ms-accounts`): cada transferencia genera dos movimientos, uno de salida y uno de entrada.
 
 ```mermaid
 erDiagram
@@ -194,11 +200,13 @@ erDiagram
     }
 ```
 
-<p align="center"><em>accounts_db (ms-accounts)</em></p>
+## 4. Los flujos más importantes
 
-## 4. Flujos críticos
+### 4.1 Iniciar sesión y mantener la sesión abierta
 
-### 4.1 Login y renovación de sesión
+**En resumen:** la app cifra la contraseña antes de enviarla. Si es correcta, recibe un pase de 15 minutos y un
+pase de renovación. Si alguien intenta usar un pase de renovación que ya se usó, se cierran todas las sesiones de
+ese usuario, por si fue robado.
 
 ```mermaid
 sequenceDiagram
@@ -239,7 +247,11 @@ sequenceDiagram
     end
 ```
 
-### 4.2 Transferencia entre cuentas propias
+### 4.2 Transferir entre cuentas propias
+
+**En resumen:** cada intento lleva un "número de recibo" único. El backend reserva las dos cuentas, valida todo y
+mueve el dinero en un solo paso. Si el mismo recibo llega dos veces, devuelve la transferencia original **sin mover
+el dinero de nuevo**. El aviso al celular sale después, sin hacer esperar al cliente.
 
 ```mermaid
 sequenceDiagram
@@ -279,10 +291,15 @@ sequenceDiagram
     end
 ```
 
-**Si la app no recibe la respuesta** (timeout o corte de red), reenvía la **misma** solicitud con la **misma** clave.
-Nunca se mueve dinero dos veces, y recibe el resultado original.
+**Si la app no recibe respuesta** (por ejemplo, se cae la señal), **no reintenta sola**: le muestra al cliente "No
+pudimos confirmar el resultado" y un botón **"Verificar estado"**, que reenvía el mismo recibo. Si la transferencia
+ya se había hecho, el cliente ve la original; el dinero nunca se mueve dos veces.
 
-### 4.3 Onboarding con compensación
+### 4.3 Registrarse (con marcha atrás si algo falla)
+
+**En resumen:** el registro crea el cliente y su cuenta, y **al final** el usuario. Si la cuenta no se puede abrir,
+se borra el cliente que alcanzó a crearse y se pide reintentar. Así nunca queda alguien que pueda iniciar sesión sin
+tener cuenta.
 
 ```mermaid
 sequenceDiagram
@@ -311,10 +328,11 @@ sequenceDiagram
     end
 ```
 
-Las credenciales se crean **al final**: si algo falla antes, nunca queda un usuario que pueda iniciar sesión sin
-cliente ni cuenta.
+### 4.4 Armar el home de cada cliente
 
-### 4.4 Experiencia dinámica (SDUI)
+**En resumen:** el home es una lista de bloques guardada en la base de datos. El backend elige los que le
+corresponden a cada cliente (según su segmento, la hora y sus preferencias) y la app los dibuja. Si el negocio
+activa una campaña en la base de datos, aparece sin publicar una versión nueva de la app.
 
 ```mermaid
 sequenceDiagram
@@ -337,7 +355,9 @@ sequenceDiagram
     Note over App: dibuja cada type que conoce<br/>e ignora los desconocidos<br/>si falla, usa su caché o un layout de respaldo
 ```
 
-## 5. Resiliencia: qué pasa cuando algo falla
+## 5. Qué pasa cuando algo falla
+
+Cada falla afecta solo a su parte; el resto de la app sigue funcionando.
 
 ```mermaid
 flowchart LR
@@ -380,4 +400,4 @@ flowchart LR
     f7 --> r7 --> a7
 ```
 
-Todos estos escenarios se pueden reproducir en vivo con los scripts de `chaos/` (ver el README).
+Todos estos casos se pueden mostrar en vivo con los scripts de `chaos/` (ver el README).

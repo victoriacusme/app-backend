@@ -1,81 +1,103 @@
-# Uso de IA en el desarrollo
+# Cómo usé la IA en este proyecto
 
-Este backend se desarrolló con **Claude Code** (asistente de programación de Anthropic, modelo Claude Opus) como
-herramienta principal. Este documento explica para qué se usó, qué decidió la persona y qué la IA, cómo se verificó
-lo que produjo y qué errores cometió.
+Desarrollé el backend con **Claude Code** (el asistente de programación de Anthropic, modelo Claude Opus) como
+herramienta principal. Aquí cuento cómo trabajé con la IA, qué decidí yo y qué hizo ella, cómo comprobé lo que
+produjo y en qué se equivocó.
 
-## Cómo se trabajó
+## Cómo trabajé
 
-El trabajo siguió el plan por fases de la prueba. En cada fase:
+Seguí el plan por fases de la prueba. En cada fase:
 
-1. **La persona fijó el alcance y las prioridades:** qué fase seguía, qué entraba y qué se postergaba (por ejemplo,
-   dejar la Fase 8 de Grafana como documento en vez de implementarla).
-2. **La IA propuso un diseño** con sus alternativas antes de escribir código: por qué paginar por cursor, por qué el
-   bloqueo pesimista ordenado, quién debía ser el dueño de las notificaciones. Las decisiones quedaron en
-   [`decisions.md`](decisions.md).
-3. **La IA implementó** el código, los tests y la configuración, siguiendo el estilo existente del repositorio.
-4. **Se verificó contra el sistema real**, no solo con tests: el stack completo levantado con Docker, con pruebas de
-   punta a punta por el gateway con `curl` y escenarios de caos.
-5. **La persona revisó**, hizo los commits y los PR, y probó desde la app.
+1. **Yo definía qué tocaba y qué quedaba fuera.** Por ejemplo, decidí dejar la Fase 8 (Grafana) como documento y no
+   implementarla todavía.
+2. **Le pedía a la IA opciones antes que código.** Para cada decisión importante comparaba alternativas: cómo
+   paginar los movimientos, cómo evitar transferencias duplicadas, qué servicio debía enviar las notificaciones.
+   Mis elecciones quedaron en [`decisions.md`](decisions.md).
+3. **La IA escribía** el código, las pruebas y la configuración, siguiendo el estilo del proyecto.
+4. **Comprobaba todo contra el sistema real**, no solo con pruebas: levantaba todo con Docker y probaba los flujos
+   de punta a punta.
+5. **Yo revisaba, hacía los commits y los PR**, y probaba desde la app.
 
-## Para qué se usó
+## Ejemplos de lo que le pedí
+
+| Lo que pedí | Qué hizo la IA |
+|---|---|
+| *"Todos los test deben ser con Mockito"* | Reescribió las pruebas que usaban dobles hechos a mano y agregó las que faltaban |
+| *"Valida que la fase 0 y 1 estén integradas para continuar"* | Corrió todas las pruebas y el flujo completo de login contra el sistema levantado, e informó qué faltaba |
+| *"Realiza la fase 5"* | Propuso el diseño del home dinámico, lo implementó con pruebas y lo verificó con los tres usuarios de prueba |
+| Le pasé un error que encontró el front: un cliente nuevo veía la meta de ahorro de otra persona | Lo reprodujo con una prueba, lo corrigió y verificó con un registro real |
+| *"Explícame qué es CI"*, *"¿para qué sirve el gateway?"* | Me explicó los conceptos en lenguaje simple antes de seguir |
+
+## Para qué la usé
 
 | Área | Uso |
 |---|---|
-| Diseño | Opciones con trade-offs para cada decisión de arquitectura; la persona eligió |
-| Código | Dominio, casos de uso, adaptadores, migraciones Flyway, semillas de datos y configuración de seguridad |
-| Tests | Unitarios con Mockito (por pedido explícito, todos los tests con colaboradores usan Mockito), de controladores y de integración con Testcontainers, incluidos los de concurrencia |
-| Infraestructura | `docker-compose.yml`, gateway Nginx, Toxiproxy, scripts de caos y de demo, y el CI |
-| Diagnóstico | Errores de entorno: red que bloquea Docker Hub, contexto de Docker Desktop, cambio de rama con archivos sin commitear, y lectura de logs para ubicar fallas |
-| Documentación | README y documentos de `docs/` |
-| Explicaciones | Conceptos que la persona pidió entender: imagen vs. contenedor, para qué sirve el gateway, qué es CI, qué es el servicio externo |
+| Diseño | Comparar alternativas con sus pros y contras; la decisión final fue mía |
+| Código | Reglas de negocio, casos de uso, base de datos, seguridad y configuración |
+| Pruebas | Pruebas unitarias con Mockito y pruebas con una base de datos real (Testcontainers), incluidas las de concurrencia |
+| Infraestructura | Docker Compose, gateway, simulador de fallas, scripts y CI |
+| Diagnóstico | Problemas del entorno: mi red bloqueaba descargas de Docker Hub, el cambio a Docker Desktop, archivos sin commitear al cambiar de rama, y la lectura de registros para encontrar fallas |
+| Documentación | El README y los documentos de esta carpeta |
+| Aprender | Me explicó conceptos que no conocía |
 
-El **front** (Flutter) se desarrolló en otra sesión de IA. Los dos lados se coordinaron a través del contrato de API.
-Por ejemplo, el front reportó un error real del backend (la meta de ahorro de otro cliente) y se corrigió con un test
-que lo reproduce.
+El **front** (Flutter) lo desarrollé en otra sesión con un asistente de IA. Los dos lados se coordinaron a través
+del contrato de la API.
 
-## Cómo se verificó lo que produjo la IA
+## Qué información compartí con la IA
 
-No se aceptó código solo porque compilaba. Cada cambio se validó en tres niveles:
+- **Solo código, registros y datos de prueba** (los usuarios ficticios ana, carlos y lucía).
+- **Ninguna clave real ni dato de clientes reales.** Las claves que aparecen en el proyecto son solo de
+  desarrollo.
 
-1. **Tests automáticos:** unos 170 tests en los tres servicios. Los de integración usan PostgreSQL real
-   (Testcontainers), no una base de datos en memoria, para probar el SQL, los bloqueos y las migraciones tal como
-   corren en producción.
-2. **Pruebas de punta a punta** sobre el stack levantado, a través del gateway: login, cuentas, transferencias,
-   idempotencia con envíos simultáneos, registro con un servicio caído, cifrado verificado leyendo la base de datos
-   y logs revisados en busca de datos personales.
-3. **Revisión de afirmaciones:** antes de documentar algo, se comprobó en el código o en el sistema. Por ejemplo, se
-   verificaron los nombres reales de las métricas antes de escribir `monitoring.md`, y el código de la app antes de
-   describir su comportamiento.
+En un banco real usaría una versión empresarial de la herramienta, con garantías sobre el manejo de los datos.
 
-## Errores que cometió la IA y cómo se detectaron
+## Cómo comprobé lo que hizo
 
-La IA se equivoca, y estos casos muestran por qué la verificación es indispensable:
+No aceptaba código solo porque compilaba. Lo comprobaba en tres niveles:
 
-| Error | Cómo se detectó | Impacto evitado |
+1. **Pruebas automáticas:** unas 170 en los tres servicios. Las de base de datos usan un PostgreSQL real (no una
+   base simulada), para probar los bloqueos y las migraciones tal como funcionan en producción.
+2. **Pruebas de punta a punta** con todo levantado: login, transferencias, el mismo recibo enviado varias veces a la
+   vez, registro con un servicio apagado, datos cifrados revisados directamente en la base y registros revisados en
+   busca de datos personales.
+3. **Verificar antes de documentar:** antes de escribir algo, comprobaba que fuera cierto en el código o en el
+   sistema.
+
+## En qué se equivocó la IA
+
+La IA se equivoca, y estos casos muestran por qué hay que verificar:
+
+| Error | Cómo lo detecté | Qué habría pasado |
 |---|---|---|
-| Timeouts de Hikari escritos como `3s` (la propiedad espera milisegundos) | Test de integración con Testcontainers | ms-accounts no habría arrancado |
-| Columna `SMALLINT` mapeada como `Integer` en JPA | Test de integración | ms-customer no habría arrancado |
-| Semilla con número `V100`: las migraciones nuevas (`V2`) quedaban bloqueadas en bases ya existentes | Despliegue real sobre la base de datos de desarrollo | Cada fase nueva habría tumbado el servicio |
-| Gateway que no leía los cambios de configuración (montaje de un archivo suelto en Docker) | Prueba de punta a punta (404 en `/transfers`) | Rutas nuevas que "no existían" |
-| Componente SDUI configurado por segmento con la cuenta de un cliente concreto | Lo reportó el front | Un cliente nuevo veía una cuenta ajena |
-| Onboarding sin compensación: quedaban clientes huérfanos | Prueba real con ms-accounts detenido | Datos inconsistentes entre servicios |
-| `toString()` de records que imprimía contraseñas y datos personales | Auditoría de logs pedida en la Fase 7 | Fuga de datos personales en los logs |
-| Afirmación de que un token alterado era aceptado (falso positivo del propio script de prueba) | Repetir la prueba alterando bytes reales | Un falso hallazgo de seguridad |
-| Variables de shell que funcionan en bash pero no en zsh | Error 127 al ejecutar | Diagnóstico equivocado de Docker |
+| Configuró un tiempo de espera con el formato equivocado (`3s` en lugar de milisegundos) | Una prueba con base de datos real | El servicio de cuentas no habría arrancado |
+| Usó un tipo de dato que no coincidía con la base de datos | Una prueba con base de datos real | El servicio de clientes no habría arrancado |
+| Numeró los datos de prueba de forma que bloqueaba las actualizaciones futuras de la base | Al desplegar sobre mi base de desarrollo | Cada fase nueva habría roto el servicio |
+| El gateway no tomaba los cambios de configuración | Una prueba de punta a punta (las rutas nuevas daban "no existe") | Rutas que parecían no existir |
+| Configuró la meta de ahorro de un cliente para todos los clientes jóvenes | Lo detectó el front | Un cliente nuevo veía la cuenta de otra persona |
+| El registro dejaba clientes "huérfanos" cuando fallaba a medias | Apagando un servicio en medio de un registro | Datos inconsistentes entre servicios |
+| Algunos objetos imprimían contraseñas y datos personales si llegaban a un registro | Una revisión de registros que le pedí en la fase de seguridad | Datos personales expuestos en los registros |
+| Reportó una falla de seguridad que no existía (su propia prueba estaba mal) | Repitiendo la prueba de forma correcta | Una falsa alarma de seguridad |
 
-## Qué no se delegó
+## Lo que no delegué
 
-- **Las decisiones de alcance y prioridad:** qué fases hacer, qué dejar fuera y cuándo integrar.
-- **La aceptación final:** commits, PR y pruebas desde la app las hizo la persona.
-- **Las acciones irreversibles:** la IA no hizo commits, push ni borrado de datos sin indicación. Antes de cambiar de
-  rama con archivos pendientes, respaldó los cambios y verificó que no se perdiera nada.
+- **Qué hacer y en qué orden:** qué fases, qué dejar fuera, cuándo integrar.
+- **La aprobación final:** los commits, los PR y las pruebas desde la app.
+- **Las acciones que no se pueden deshacer:** la IA no hacía commits, push ni borraba datos sin que yo se lo
+  pidiera. Antes de cambiar de rama con archivos pendientes, guardaba una copia y verificaba que no se perdiera
+  nada.
 
-## Lecciones
+## Dónde la IA no pudo avanzar sola
 
-- **La IA acelera mucho la parte mecánica** (adaptadores, mapeos, tests, configuración), pero el valor está en
-  verificar contra el sistema real. Varios errores solo aparecieron con una base de datos real o con el stack
-  levantado.
-- **Pedir alternativas antes del código** produjo mejores decisiones que pedir directamente la implementación.
-- **Los tests de integración con PostgreSQL real** fueron los que más errores atraparon. Una base de datos en
-  memoria no los habría detectado.
+- **Comandos con permisos de administrador**, como darme acceso a Docker con `sudo`, y cerrar y volver a abrir mi
+  sesión: los hice yo.
+- **Ejecutar el CI en GitHub:** la IA lo preparó y validó localmente, pero la primera ejecución real ocurre cuando
+  yo subo los cambios.
+- **Probar en el celular:** las pruebas en la app las hice yo.
+
+## Lo que aprendí
+
+- **La IA acelera muchísimo la parte repetitiva** (conexiones a la base de datos, pruebas, configuración), pero el
+  valor está en **comprobar contra el sistema real**. Varios errores solo aparecieron con una base de datos real o
+  con todo levantado.
+- **Pedir opciones antes que código** me dio mejores decisiones que pedir directamente la solución.
+- **Las pruebas con una base de datos real** fueron las que más errores atraparon.
